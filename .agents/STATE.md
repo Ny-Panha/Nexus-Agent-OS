@@ -1,19 +1,16 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T02:51:30+07:00
+- **Last Session**: IDE — 2026-11-22T02:59:55+07:00
 - **Summary**:
-  - **Git Repository & Remote Push**:
-    - Repository initialized and tracked on branch `main`.
-    - Added `ollama_models/` to `.gitignore` to prevent 2GB LLaMA binary from exceeding GitHub's 100MB file limit.
-    - Staged and committed complete v2.0 Studio architecture:
-      - Frameless Studio UI: TopBar (`Ctrl+K` palette + glass slider), floating Sidebar, ChatPanel with live `text_delta` streaming + elapsed time, upward ComposerBar popovers (`Provider`, `Model`, `Effort`, `Permission`, `Context Ring`), and 4-zone InspectorPanel.
-      - Zero-API-key Account-Login Engine (`Gemini via Antigravity agy`, `Codex via ChatGPT`, `Claude Code`, `Local AI Ollama`).
-      - Account sign-out / logout feature (`POST /api/providers/:id/logout` + UI buttons in AI accounts & General settings tabs).
-      - Warm Persistent Worker Pool & Quota auto-fallback.
-    - Pushed commit `cf9c470` to remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
-  - **Verification**:
-    - `git status`: Clean working tree on branch `main`.
-    - Remote URL updated to `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
+  - **Removed Duplicate Middle Panel & Redundant Split View Button (`remove jorl 1`)**:
+    - Removed duplicate middle inspector panel (`{splitView && (<InspectorPanel ... initialTab="mesh" />)}`) in `src/App.tsx`.
+    - Removed redundant `Columns2` (Toggle Split View) icon button from `ChatPanel.tsx` header so only the single `PanelRight` (Inspector toggle) button remains.
+    - Added controlled `tab` & `onTabChange` support to `src/components/InspectorPanel.tsx`.
+    - Unified `Split view` trigger in `Sidebar.tsx` and `CommandPalette.tsx` to cleanly toggle the single Right Inspector between `mesh` and `profile` without spawning a 2nd panel.
+    - Verified clean layout: exactly 3 columns (Left Sidebar, Center Chat, Right Inspector) when Inspector is open, or 2 columns when closed, matching Rex Desk 1:1.
+  - **Build & Verification**:
+    - `npm run typecheck && npm run build`: **PASS** (0 errors).
+    - Pushed commit `a70ef15` to GitHub remote `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
 - **Active Environment**:
   - Project Path: `c:\Users\nhastar\Desktop\nexus-agent-os`
   - GitHub Remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`
@@ -21,4 +18,4 @@
   - Vite Dev UI: `http://127.0.0.1:5178`
   - Launch Commands: `npm run start:desktop` or double-click `start-nexus-app.bat`
 - **Next Steps**:
-  - Codebase is fully synchronized with GitHub remote `main`.
+  - Reload / restart desktop app to view the clean 3-panel Rex Desk layout.
