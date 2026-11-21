@@ -295,18 +295,6 @@ export function ChatPanel({
           </button>
           <button
             type="button"
-            onClick={onToggleSplitView}
-            title="Toggle Split View"
-            className={`w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors ${
-              splitView
-                ? 'bg-white/[0.09] text-[var(--accent)]'
-                : 'text-[var(--text-muted)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            <Columns2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
             onClick={onToggleInspector}
             title={inspectorOpen ? 'Hide Inspector' : 'Show Inspector'}
             className={`w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer transition-colors ${

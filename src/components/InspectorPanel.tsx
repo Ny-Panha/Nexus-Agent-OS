@@ -54,6 +54,8 @@ interface InspectorPanelProps {
   telemetry: SystemTelemetry | null;
   telemetryLoading: boolean;
   initialTab?: InspectorTab;
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   closable?: boolean;
   onClose?: () => void;
   onRefreshTelemetry: () => void;
@@ -73,13 +75,20 @@ export function InspectorPanel({
   telemetry,
   telemetryLoading,
   initialTab = 'profile',
+  tab: externalTab,
+  onTabChange,
   closable = true,
   onClose,
   onRefreshTelemetry,
   onQuickScreenshot,
 }: InspectorPanelProps) {
   const copy = t(language);
-  const [tab, setTab] = useState<InspectorTab>(initialTab);
+  const [internalTab, setInternalTab] = useState<InspectorTab>(initialTab);
+  const tab = externalTab !== undefined ? externalTab : internalTab;
+  const setTab = (next: InspectorTab) => {
+    setInternalTab(next);
+    onTabChange?.(next);
+  };
   const [mediaSubTab, setMediaSubTab] = useState<'media' | 'files' | 'links' | 'pinned'>('media');
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [quickShot, setQuickShot] = useState<string | null>(null);

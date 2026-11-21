@@ -24,7 +24,7 @@ import { TopBar } from './components/TopBar';
 import { CommandPalette } from './components/CommandPalette';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
-import { InspectorPanel } from './components/InspectorPanel';
+import { InspectorPanel, type InspectorTab } from './components/InspectorPanel';
 import { SettingsModal, type SettingsSection } from './components/SettingsModal';
 
 const INITIAL_AGENT_STATES: Record<AgentId, { state: AgentRunState; detail?: string }> = {
@@ -80,10 +80,22 @@ export function App() {
   // Layout controls
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [splitView, setSplitView] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('profile');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general');
+
+  const splitView = inspectorOpen && inspectorTab === 'mesh';
+  const handleToggleSplitView = useCallback(() => {
+    if (!inspectorOpen) {
+      setInspectorOpen(true);
+      setInspectorTab('mesh');
+    } else if (inspectorTab === 'mesh') {
+      setInspectorTab('profile');
+    } else {
+      setInspectorTab('mesh');
+    }
+  }, [inspectorOpen, inspectorTab]);
 
   const refreshTelemetry = useCallback(async () => {
     setTelemetryLoading(true);
@@ -507,7 +519,7 @@ export function App() {
             onDeleteSession={(id) => void handleDeleteSession(id)}
             onSelectTarget={setTargetMode}
             onClickNeedsYou={handleClickNeedsYou}
-            onToggleSplitView={() => setSplitView((v) => !v)}
+            onToggleSplitView={handleToggleSplitView}
             onQuickScreenshot={() => void handleQuickScreenshot()}
             onOpenWorkspaceFolder={handleOpenWorkspaceFolder}
             onOpenSettings={(sec) => openSettingsAt((sec as SettingsSection) || 'general')}
@@ -536,7 +548,7 @@ export function App() {
           pendingApprovals={pendingApprovals}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           onToggleInspector={() => setInspectorOpen((v) => !v)}
-          onToggleSplitView={() => setSplitView((v) => !v)}
+          onToggleSplitView={handleToggleSplitView}
           onNewSession={() => void handleNewSession()}
           onChangeTarget={setTargetMode}
           onSend={(p) => void handleSend(p)}
@@ -555,29 +567,7 @@ export function App() {
           onOpenSettings={(sec) => openSettingsAt((sec as SettingsSection) || 'general')}
         />
 
-        {/* Split View Secondary Live Mesh / Laptop Pane */}
-        {splitView && (
-          <InspectorPanel
-            language={settings.language}
-            targetMode={targetMode}
-            activeSession={activeSession}
-            activeProvider={activeProvider}
-            agentStates={agentStates}
-            livePlan={livePlan}
-            liveHandoffs={liveHandoffs}
-            liveTraces={liveTraces}
-            auditLogs={auditLogs}
-            telemetry={telemetry}
-            telemetryLoading={telemetryLoading}
-            initialTab="mesh"
-            closable
-            onClose={() => setSplitView(false)}
-            onRefreshTelemetry={() => void refreshTelemetry()}
-            onQuickScreenshot={handleQuickScreenshot}
-          />
-        )}
-
-        {/* Right Context Inspector */}
+        {/* Single Right Context Inspector */}
         {inspectorOpen && (
           <InspectorPanel
             language={settings.language}
@@ -591,7 +581,8 @@ export function App() {
             auditLogs={auditLogs}
             telemetry={telemetry}
             telemetryLoading={telemetryLoading}
-            initialTab="profile"
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
             closable
             onClose={() => setInspectorOpen(false)}
             onRefreshTelemetry={() => void refreshTelemetry()}
@@ -612,7 +603,7 @@ export function App() {
         onSelectTarget={setTargetMode}
         onSwitchProvider={(p) => void handleSelectProvider(p)}
         onRunPreset={handleRunPreset}
-        onToggleSplitView={() => setSplitView((v) => !v)}
+        onToggleSplitView={handleToggleSplitView}
         onQuickScreenshot={() => void handleQuickScreenshot()}
         onOpenSettings={(sec) => openSettingsAt((sec as SettingsSection) || 'general')}
       />
