@@ -1,8 +1,12 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T04:44:00+07:00
+- **Last Session**: IDE — 2026-11-22T04:52:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Direct Slot Selection in Composer Provider Picker (`src/components/ComposerBar.tsx`, `src/App.tsx`, `src/components/ChatPanel.tsx`)**:
+    - Previously, when a provider had multiple slots (e.g. Gemini Account 1 & Account 2), the composer bar popup only showed a single "Gemini • 1/2 slots" item, making it impossible to switch between Account 1 and Account 2 directly from the chat.
+    - Updated the Composer provider dropdown to list each slot individually under its provider group (e.g. `Gemini` with `Account 1 (Default · Antigravity)` and `Account 2 (Gemini CLI)`), showing their active checkmarks and account labels.
+    - Clicking any slot immediately switches the active route to that exact slot and persists it into settings.
   - **Fixed Gemini CLI Slot Detection for API Key Authentication (`server/llm/providerRegistry.ts`)**:
     - When user signs in with Gemini API Key inside Gemini CLI (`selectedType: 'gemini-api-key'`), detection previously looked solely for Google OAuth email in `google_accounts.json` and reported "Not signed in".
     - Updated slot detection in `inspectGeminiCliSlot()` to verify non-secret settings (`settings.json`) and presence of credentials (`gemini-credentials.json`) without ever reading token contents.

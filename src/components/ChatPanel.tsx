@@ -60,7 +60,7 @@ interface ChatPanelProps {
   onSend: (prompt: string) => void;
   onStop: () => void;
   onRunPreset: (preset: WorkflowPreset) => void;
-  onSelectProvider: (provider: ProviderType) => void;
+  onSelectProvider: (provider: ProviderType, slotId?: string) => void;
   onSelectModel: (provider: ProviderType, modelId: string) => void;
   onSelectEffort: (effort: EffortLevel) => void;
   onSelectPermission: (mode: SafetyMode) => void;

@@ -56,7 +56,7 @@ interface ComposerBarProps {
   isRunning: boolean;
   onSend: (prompt: string) => void;
   onStop: () => void;
-  onSelectProvider: (provider: ProviderType) => void;
+  onSelectProvider: (provider: ProviderType, slotId?: string) => void;
   onSelectModel: (provider: ProviderType, modelId: string) => void;
   onSelectEffort: (effort: EffortLevel) => void;
   onSelectPermission: (mode: SafetyMode) => void;
@@ -429,6 +429,61 @@ export function ComposerBar({
                   }}
                 >
                   {providers.map((p) => {
+                    const hasMultiSlots = Boolean(p.slots && p.slots.length > 1);
+
+                    if (hasMultiSlots && p.slots) {
+                      return (
+                        <div key={p.id} className="pt-1 pb-0.5 space-y-0.5">
+                          <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] flex items-center justify-between">
+                            <span>{p.name}</span>
+                            <span className="font-mono text-[10px] text-[var(--text-muted)]">
+                              {p.slots.filter((s) => s.signedIn).length}/{p.slots.length} active
+                            </span>
+                          </div>
+                          {p.slots.map((slot) => {
+                            const isSlotActive =
+                              effectiveProviderId === p.id &&
+                              (activeRoute?.slotId || activeProvider?.activeSlotId || 'slot-1') === slot.id;
+                            return (
+                              <button
+                                key={slot.id}
+                                type="button"
+                                onClick={() => {
+                                  onSelectProvider(p.id, slot.id);
+                                  setPopover(null);
+                                }}
+                                className={`w-full px-3 py-2 rounded-xl text-left flex items-center justify-between gap-3 transition-colors cursor-pointer pl-4 ${
+                                  isSlotActive ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className="text-xs font-semibold"
+                                      style={{ color: isSlotActive ? 'var(--accent)' : 'var(--text-primary)' }}
+                                    >
+                                      {slot.label}
+                                    </span>
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full ${
+                                        slot.signedIn ? 'bg-emerald-400' : 'bg-rose-400'
+                                      }`}
+                                    />
+                                  </div>
+                                  <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
+                                    {slot.accountLabel || slot.homeDirHint || p.subtitle}
+                                  </div>
+                                </div>
+                                {isSlotActive && (
+                                  <Check className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
+
                     const selected = p.id === effectiveProviderId;
                     const signedSlots = p.slots ? p.slots.filter((s) => s.signedIn).length : p.signedIn ? 1 : 0;
                     return (

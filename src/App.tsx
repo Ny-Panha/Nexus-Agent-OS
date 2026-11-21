@@ -304,10 +304,18 @@ export function App() {
     setSettings(updated);
   };
 
-  const handleSelectProvider = async (nextProvider: ProviderType) => {
+  const handleSelectProvider = async (nextProvider: ProviderType, requestedSlotId?: string) => {
     const activeAgentId: AgentId = targetMode === 'auto' ? 'orchestrator' : targetMode;
-    const prevRouteProvider = settings.agentRoutes?.[activeAgentId]?.provider || settings.provider;
-    if (nextProvider === prevRouteProvider && nextProvider === settings.provider) return;
+    const prevRoute = settings.agentRoutes?.[activeAgentId];
+    const prevRouteProvider = prevRoute?.provider || settings.provider;
+    const prevRouteSlot = prevRoute?.slotId;
+    if (
+      nextProvider === prevRouteProvider &&
+      (!requestedSlotId || requestedSlotId === prevRouteSlot) &&
+      nextProvider === settings.provider
+    ) {
+      return;
+    }
 
     const prevName =
       providers.find((p) => p.id === prevRouteProvider)?.name || prevRouteProvider;
@@ -316,7 +324,7 @@ export function App() {
 
     const isCliProv = nextProvider === 'codex' || nextProvider === 'gemini_agy' || nextProvider === 'claude';
     const nextSlotId = isCliProv
-      ? settings.activeSlots?.[nextProvider] || nextMeta?.activeSlotId || 'slot-1'
+      ? requestedSlotId || settings.activeSlots?.[nextProvider] || nextMeta?.activeSlotId || 'slot-1'
       : undefined;
     const nextSlot = isCliProv
       ? nextMeta?.slots?.find((s) => s.id === nextSlotId) || nextMeta?.slots?.[0]
@@ -342,8 +350,14 @@ export function App() {
       },
     };
 
+    const nextActiveSlots =
+      isCliProv && nextSlotId
+        ? { ...settings.activeSlots, [nextProvider]: nextSlotId }
+        : settings.activeSlots;
+
     await patchSettings({
       ...(activeAgentId === 'orchestrator' ? { provider: nextProvider } : {}),
+      ...(nextActiveSlots ? { activeSlots: nextActiveSlots } : {}),
       agentRoutes: nextRoutes,
       ...(defaultModel
         ? { selectedModels: { ...settings.selectedModels, [nextProvider]: defaultModel } }
@@ -600,7 +614,7 @@ export function App() {
           onSend={(p) => void handleSend(p)}
           onStop={() => void handleStop()}
           onRunPreset={handleRunPreset}
-          onSelectProvider={(p) => void handleSelectProvider(p)}
+          onSelectProvider={(p, slotId) => void handleSelectProvider(p, slotId)}
           onSelectModel={(p, m) => void handleSelectModel(p, m)}
           onSelectEffort={(e) => void handleSelectEffort(e)}
           onSelectPermission={(m) => void handleSelectPermission(m)}
