@@ -25,6 +25,6 @@ npm run dev:web
 
 ## AI Setup
 Open **Settings (⚙️)** inside the app:
-- **Gemini API**: Paste your Gemini API Key (`gemini-2.5-flash` recommended).
+- **Gemini API**: Paste your Gemini API Key (`gemini-3.8-flash` / Gemini 3.8 Flash recommended).
 - **Ollama Local (Free)**: Switch Provider to `Ollama Local`, click `Detect Installed Models`, and test connection.
 - **OpenAI-Compatible**: Works with OpenAI, OpenRouter, Groq, LM Studio, DeepSeek, etc.
