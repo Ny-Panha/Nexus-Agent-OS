@@ -890,8 +890,8 @@ async function runGeminiCli(params: {
     signal,
   } = params;
 
-  // Verified gemini --help flags: -p/--prompt, -m/--model, -o stream-json, --approval-mode (default|auto_edit|yolo|plan), -s/--sandbox
-  const args: string[] = ['-p', '', '-o', 'stream-json'];
+  // Verified gemini --help flags: -p/--prompt, -m/--model, -o stream-json, --approval-mode (default|auto_edit|yolo|plan), -s/--sandbox, --skip-trust
+  const args: string[] = ['-p', '', '-o', 'stream-json', '--skip-trust'];
   if (model && model !== 'default' && model !== 'auto') {
     args.push('-m', model);
   }
@@ -912,11 +912,16 @@ async function runGeminiCli(params: {
   let lastErrorText = '';
   let usage: TokenUsageStats | undefined;
 
+  const runEnv: NodeJS.ProcessEnv = {
+    ...env,
+    GEMINI_CLI_TRUST_WORKSPACE: 'true',
+  };
+
   const res = await spawnJsonStream({
     binary,
     args,
     cwd: workspace,
-    env,
+    env: runEnv,
     stdinText: fullPrompt,
     signal,
     onJsonEvent: (ev) => {

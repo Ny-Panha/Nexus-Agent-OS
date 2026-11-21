@@ -150,6 +150,7 @@ export function buildSlotEnv(provider: CliAccountProvider, slot: AccountSlotConf
   } else if (provider === 'gemini_agy' && slot.cliEngine === 'gemini_cli') {
     env.GEMINI_CLI_HOME = absHome;
     env.GEMINI_FORCE_FILE_STORAGE = 'true';
+    env.GEMINI_CLI_TRUST_WORKSPACE = 'true';
   }
   return env;
 }

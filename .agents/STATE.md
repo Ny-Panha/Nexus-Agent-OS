@@ -1,8 +1,13 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T04:52:00+07:00
+- **Last Session**: IDE — 2026-11-22T04:58:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Fixed Gemini CLI Workspace Trust in Headless Subprocess (`server/llm/cliRunner.ts`, `server/llm/providerRegistry.ts`)**:
+    - Official Gemini CLI v0.70.0 in automated/headless mode rejects untrusted directories with: `Gemini CLI is not running in a trusted directory. To proceed, either use '--skip-trust', set the 'GEMINI_CLI_TRUST_WORKSPACE=true' environment variable...`.
+    - Verified via `gemini.cmd --help` that `--skip-trust` is an official documented flag (`Trust the current workspace for this session`).
+    - Added `--skip-trust` to headless args and injected `GEMINI_CLI_TRUST_WORKSPACE=true` into subprocess environment.
+    - Live verified stream-json headless execution: `gemini.cmd -m gemini-2.5-flash -p "say hello" -o stream-json --skip-trust` completed cleanly with exit code 0 and streamed response without warnings.
   - **Direct Slot Selection in Composer Provider Picker (`src/components/ComposerBar.tsx`, `src/App.tsx`, `src/components/ChatPanel.tsx`)**:
     - Previously, when a provider had multiple slots (e.g. Gemini Account 1 & Account 2), the composer bar popup only showed a single "Gemini • 1/2 slots" item, making it impossible to switch between Account 1 and Account 2 directly from the chat.
     - Updated the Composer provider dropdown to list each slot individually under its provider group (e.g. `Gemini` with `Account 1 (Default · Antigravity)` and `Account 2 (Gemini CLI)`), showing their active checkmarks and account labels.
