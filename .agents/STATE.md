@@ -1,16 +1,21 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T02:59:55+07:00
+- **Last Session**: IDE — 2026-11-22T03:09:50+07:00
 - **Summary**:
-  - **Removed Duplicate Middle Panel & Redundant Split View Button (`remove jorl 1`)**:
-    - Removed duplicate middle inspector panel (`{splitView && (<InspectorPanel ... initialTab="mesh" />)}`) in `src/App.tsx`.
-    - Removed redundant `Columns2` (Toggle Split View) icon button from `ChatPanel.tsx` header so only the single `PanelRight` (Inspector toggle) button remains.
-    - Added controlled `tab` & `onTabChange` support to `src/components/InspectorPanel.tsx`.
-    - Unified `Split view` trigger in `Sidebar.tsx` and `CommandPalette.tsx` to cleanly toggle the single Right Inspector between `mesh` and `profile` without spawning a 2nd panel.
-    - Verified clean layout: exactly 3 columns (Left Sidebar, Center Chat, Right Inspector) when Inspector is open, or 2 columns when closed, matching Rex Desk 1:1.
+  - **Implemented Rex Desk Real Interactive Effort Slider Widget (`kleang ng dak tam real use ban ot ?`)**:
+    - Replaced the boring vertical Effort dropdown with the exact interactive card widget from Rex Desk screenshots:
+      - **Top Header**:
+        - ⚡ (`Zap`) icon: Quick toggle to Turbo / Fast low-effort mode.
+        - **Center Pill**: Shows dynamic vibrant blue effort title (`Low`, `Medium`, `High`, `Extra High` / `Max`) + active model subtitle (`Model >`) which opens model selector with one click.
+        - ↻ (`RotateCcw`) icon: Resets thinking effort to default `Medium`.
+      - **Bottom Slider Track**:
+        - Horizontal capsule track with smooth blue fill bar.
+        - 4 discrete tick dots (`Low`, `Medium`, `High`, `Extra High` / `Max`).
+        - Smooth round white knob / thumb.
+        - Supports direct clicking anywhere on the track / dots and tactile pointer dragging.
   - **Build & Verification**:
     - `npm run typecheck && npm run build`: **PASS** (0 errors).
-    - Pushed commit `a70ef15` to GitHub remote `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
+    - Pushed commit `8b8508f` to GitHub `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
 - **Active Environment**:
   - Project Path: `c:\Users\nhastar\Desktop\nexus-agent-os`
   - GitHub Remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`
@@ -18,4 +23,4 @@
   - Vite Dev UI: `http://127.0.0.1:5178`
   - Launch Commands: `npm run start:desktop` or double-click `start-nexus-app.bat`
 - **Next Steps**:
-  - Reload / restart desktop app to view the clean 3-panel Rex Desk layout.
+  - Restart / reload desktop app to play with the real Effort Slider widget!
