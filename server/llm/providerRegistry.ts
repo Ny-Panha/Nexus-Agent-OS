@@ -409,6 +409,7 @@ async function inspectGeminiCliSlot(
 
   // Read ONLY non-secret public email display from google_accounts.json (NEVER read oauth_creds.json!)
   let activeEmail: string | undefined;
+  let isApiKeyAuth = false;
   if (absHome) {
     try {
       const raw = await fs.readFile(path.join(absHome, '.gemini', 'google_accounts.json'), 'utf8');
@@ -419,9 +420,24 @@ async function inspectGeminiCliSlot(
     } catch {
       // Not yet signed in in this slot
     }
+
+    // Also detect if user authenticated via Gemini API Key inside official Gemini CLI
+    try {
+      const settingsPath = path.join(absHome, '.gemini', 'settings.json');
+      const credsPath = path.join(absHome, '.gemini', 'gemini-credentials.json');
+      if (fileExists(settingsPath) && fileExists(credsPath)) {
+        const settingsRaw = await fs.readFile(settingsPath, 'utf8');
+        const parsedSettings = JSON.parse(settingsRaw) as { security?: { auth?: { selectedType?: string } } };
+        if (parsedSettings.security?.auth?.selectedType === 'gemini-api-key') {
+          isApiKeyAuth = true;
+        }
+      }
+    } catch {
+      // Not signed in via API key
+    }
   }
 
-  const signedIn = Boolean(activeEmail);
+  const signedIn = Boolean(activeEmail || isApiKeyAuth);
   let models: ModelOption[] = [];
 
   if (signedIn) {
@@ -460,6 +476,12 @@ async function inspectGeminiCliSlot(
     models[0]?.id ||
     'gemini-2.5-flash';
 
+  const accountLabel = activeEmail
+    ? `${activeEmail} (Gemini CLI)`
+    : isApiKeyAuth
+      ? 'Gemini API Key (CLI Slot 2)'
+      : undefined;
+
   return {
     id: slot.id,
     provider: 'gemini_agy',
@@ -470,17 +492,17 @@ async function inspectGeminiCliSlot(
     installed: true,
     signedIn,
     binaryPath,
-    accountLabel: signedIn ? `${activeEmail} (Gemini CLI)` : undefined,
+    accountLabel,
     models,
     defaultModel: preferredDefault,
     canLogin: true,
-    loginActionLabel: signedIn ? 'Switch Google account' : 'Sign in with Google',
+    loginActionLabel: signedIn ? 'Switch account' : 'Sign in',
     canLogout: signedIn,
     logoutActionLabel: 'Sign out',
     isDefault: false,
     error: signedIn
       ? undefined
-      : `${slot.label} is not signed in yet. Click Sign in with Google to authenticate a separate Google account in ${homeDirHint}.`,
+      : `${slot.label} is not signed in yet. Click Sign in to authenticate with Google or Gemini API Key in ${homeDirHint}.`,
   };
 }
 
