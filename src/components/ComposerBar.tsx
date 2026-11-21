@@ -4,12 +4,15 @@ import {
   ArrowUp,
   Square,
   ChevronDown,
+  ChevronRight,
   Check,
   HelpCircle,
   Camera,
   FolderOpen,
   Sparkles,
   LogIn,
+  Zap,
+  RotateCcw,
 } from 'lucide-react';
 import type {
   AppSettings,
@@ -116,6 +119,64 @@ export function ComposerBar({
   const currentEffort = EFFORT_OPTIONS.find((e) => e.id === settings.effort) || EFFORT_OPTIONS[1];
   const currentPermission =
     PERMISSION_OPTIONS.find((p) => p.id === settings.safetyMode) || PERMISSION_OPTIONS[1];
+
+  // Discrete Effort Slider stops matching Rex Desk real widget
+  const isAgy = settings.provider === 'gemini_agy';
+  const topStopLabel = isAgy ? 'Max' : 'Extra High';
+  const topStopId: EffortLevel = isAgy ? 'max' : 'xhigh';
+
+  const sliderStops = useMemo(
+    () => [
+      { id: 'low' as EffortLevel, label: 'Low', desc: 'Fast, light thinking' },
+      { id: 'medium' as EffortLevel, label: 'Medium', desc: 'Balanced' },
+      { id: 'high' as EffortLevel, label: 'High', desc: 'Thinks longer' },
+      { id: topStopId, label: topStopLabel, desc: isAgy ? 'Longest thinking, slowest' : 'Thinks a lot longer' },
+    ],
+    [isAgy, topStopId, topStopLabel],
+  );
+
+  const activeStopIndex = useMemo(() => {
+    if (settings.effort === 'max' || settings.effort === 'xhigh') return 3;
+    if (settings.effort === 'high') return 2;
+    if (settings.effort === 'medium') return 1;
+    return 0; // 'low'
+  }, [settings.effort]);
+
+  const activeStop = sliderStops[activeStopIndex] || sliderStops[1];
+
+  const sliderTrackRef = useRef<HTMLDivElement | null>(null);
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false);
+
+  const handleSliderSeek = (clientX: number) => {
+    if (!sliderTrackRef.current) return;
+    const rect = sliderTrackRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const targetIdx = Math.round(ratio * (sliderStops.length - 1));
+    const nextEffort = sliderStops[targetIdx]?.id;
+    if (nextEffort && nextEffort !== settings.effort) {
+      onSelectEffort(nextEffort);
+    }
+  };
+
+  const handleSliderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDraggingSlider(true);
+    handleSliderSeek(e.clientX);
+  };
+
+  const handleSliderPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingSlider) return;
+    handleSliderSeek(e.clientX);
+  };
+
+  const handleSliderPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    setIsDraggingSlider(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
 
   const slashSuggestions = useMemo(() => {
     if (!input.startsWith('/')) return [];
@@ -490,7 +551,7 @@ export function ComposerBar({
               )}
             </div>
 
-            {/* 3. Effort Picker */}
+            {/* 3. Effort Picker with Rex Desk Real Interactive Slider */}
             <div className="relative">
               <button
                 type="button"
@@ -501,47 +562,109 @@ export function ComposerBar({
                     : 'border-transparent text-[var(--text-secondary)] hover:bg-white/[0.06] hover:text-[var(--text-primary)]'
                 }`}
               >
-                <span>{currentEffort.label}</span>
+                <span>{activeStop.label}</span>
                 <ChevronDown className="w-3 h-3 text-[var(--text-muted)]" />
               </button>
 
               {popover === 'effort' && (
                 <div
-                  className="absolute right-0 bottom-full mb-2 w-[230px] rounded-2xl border shadow-2xl p-1.5 z-40 space-y-0.5"
+                  className="absolute right-0 bottom-full mb-2 w-[232px] rounded-2xl border shadow-2xl p-3 z-40 select-none backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150"
                   style={{
                     backgroundColor: 'var(--bg-elevated)',
                     borderColor: 'var(--border-strong)',
                   }}
                 >
-                  {EFFORT_OPTIONS.map((opt) => {
-                    const selected = opt.id === settings.effort;
-                    return (
+                  {/* Top Bar: Turbo Zap · Center Effort/Model Pill · Reset */}
+                  <div className="flex items-center justify-between gap-1.5 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => onSelectEffort(settings.effort === 'low' ? 'high' : 'low')}
+                      title={
+                        settings.effort === 'low'
+                          ? 'Fast Turbo Mode Active (Click for High)'
+                          : 'Switch to Fast Turbo Mode (Low effort)'
+                      }
+                      className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+                        settings.effort === 'low'
+                          ? 'bg-amber-500/20 text-amber-300'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/[0.06]'
+                      }`}
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                    </button>
+
+                    <div className="flex-1 px-2.5 py-1 rounded-xl bg-white/[0.04] border border-white/[0.06] text-center min-w-0">
+                      <div className="text-[13px] font-bold text-sky-400 leading-tight">
+                        {activeStop.label}
+                      </div>
                       <button
-                        key={opt.id}
                         type="button"
-                        onClick={() => {
-                          onSelectEffort(opt.id);
-                          setPopover(null);
-                        }}
-                        className={`w-full px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
-                          selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'
-                        }`}
+                        onClick={() => setPopover('model')}
+                        title="Click to change model"
+                        className="text-[11px] text-[var(--text-muted)] hover:text-white inline-flex items-center justify-center gap-0.5 truncate max-w-[124px] cursor-pointer mt-0.5 transition-colors"
                       >
-                        <div>
-                          <div
-                            className="text-xs font-semibold"
-                            style={{ color: selected ? 'var(--accent)' : 'var(--text-primary)' }}
-                          >
-                            {opt.label}
-                          </div>
-                          <div className="text-[11px] text-[var(--text-muted)]">{opt.desc}</div>
-                        </div>
-                        {selected && (
-                          <Check className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />
-                        )}
+                        <span className="truncate">{currentModelLabel}</span>
+                        <ChevronRight className="w-3 h-3 shrink-0" />
                       </button>
-                    );
-                  })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onSelectEffort('medium')}
+                      title="Reset thinking effort to Medium"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/[0.06] transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Bottom: Rex Desk Discrete Horizontal Slider Track */}
+                  <div
+                    ref={sliderTrackRef}
+                    onPointerDown={handleSliderPointerDown}
+                    onPointerMove={handleSliderPointerMove}
+                    onPointerUp={handleSliderPointerUp}
+                    className="relative h-6 rounded-full bg-white/[0.08] p-0.5 flex items-center cursor-pointer select-none overflow-hidden"
+                    style={{ touchAction: 'none' }}
+                  >
+                    {/* Blue filled progress bar up to the thumb */}
+                    <div
+                      className="absolute left-0 top-0 bottom-0 rounded-full bg-sky-500 transition-all duration-150"
+                      style={{
+                        width:
+                          activeStopIndex === 0
+                            ? '22px'
+                            : activeStopIndex === 3
+                              ? '100%'
+                              : `calc(${activeStopIndex * 33.333}% + 18px)`,
+                      }}
+                    />
+
+                    {/* 4 Discrete Tick Dots */}
+                    <div className="absolute inset-0 flex items-center justify-between px-3 pointer-events-none">
+                      {sliderStops.map((s, idx) => (
+                        <span
+                          key={s.id}
+                          className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                            idx <= activeStopIndex ? 'bg-white/80' : 'bg-white/25'
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    {/* Smooth White Thumb Knob */}
+                    <div
+                      className="w-5 h-5 rounded-full bg-white shadow-md absolute top-0.5 transition-all duration-150 pointer-events-none"
+                      style={{
+                        left:
+                          activeStopIndex === 0
+                            ? '2px'
+                            : activeStopIndex === 3
+                              ? 'calc(100% - 22px)'
+                              : `calc(${activeStopIndex * 33.333}% - ${activeStopIndex * 6}px + 2px)`,
+                      }}
+                    />
+                  </div>
                 </div>
               )}
             </div>
