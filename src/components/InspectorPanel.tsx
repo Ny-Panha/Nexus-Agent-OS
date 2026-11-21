@@ -521,6 +521,13 @@ export function InspectorPanel({
                         </span>
                         <span className="text-[var(--text-muted)]">{h.status}</span>
                       </div>
+                      {h.provider && (
+                        <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">
+                          {h.provider}
+                          {h.slotLabel ? ` · ${h.slotLabel}` : h.slotId ? ` · ${h.slotId}` : ''}
+                          {h.model ? ` · ${h.model}` : ''}
+                        </div>
+                      )}
                       <p className="text-[11px] text-[var(--text-secondary)]">{h.task}</p>
                     </div>
                   ))}
@@ -580,7 +587,7 @@ export function InspectorPanel({
                         </span>
                       </div>
                       <div className="text-[10px] text-[var(--text-muted)] truncate">
-                        {log.decision} · {log.status} {log.durationMs ? `· ${log.durationMs}ms` : ''}
+                        [{log.agent}] {log.argsPreview} · {log.status} {log.durationMs ? `· ${log.durationMs}ms` : ''}
                       </div>
                     </div>
                   ))}

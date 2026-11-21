@@ -3,15 +3,20 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type {
+  AccountSlotConfig,
+  AgentId,
+  AgentRouteConfig,
   AppSettings,
   AuditLogEntry,
   ChatMessage,
   ChatSession,
+  CliAccountProvider,
   StorageStats,
   WorkflowPreset,
 } from '../../shared/types.js';
 
 const DATA_DIR = path.resolve(process.cwd(), '.nexus-data');
+const CLI_HOMES_ROOT = path.resolve(process.cwd(), 'data', 'cli-homes');
 const SCREENSHOTS_DIR = path.join(DATA_DIR, 'screenshots');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
@@ -22,20 +27,101 @@ export function getDataDir(): string {
   return DATA_DIR;
 }
 
+export function getCliHomesRoot(): string {
+  return CLI_HOMES_ROOT;
+}
+
+export function getSlotCliHomeDir(provider: CliAccountProvider, slotId: string): string {
+  const safeSlot = slotId.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safeSlot || safeSlot !== slotId) {
+    throw new Error(`Invalid slot ID: ${slotId}`);
+  }
+  const resolved = path.resolve(CLI_HOMES_ROOT, provider, safeSlot);
+  if (!resolved.startsWith(CLI_HOMES_ROOT + path.sep)) {
+    throw new Error(`Resolved slot path escaped CLI homes root: ${resolved}`);
+  }
+  return resolved;
+}
+
 export function getScreenshotsDir(): string {
   return SCREENSHOTS_DIR;
 }
 
+export function createDefaultAccountSlots(): Record<CliAccountProvider, AccountSlotConfig[]> {
+  const createdAt = '2026-01-01T00:00:00.000Z';
+  return {
+    codex: [
+      {
+        id: 'slot-1',
+        label: 'Account 1 (Default)',
+        cliEngine: 'codex',
+        createdAt,
+      },
+    ],
+    gemini_agy: [
+      {
+        id: 'slot-1',
+        label: 'Account 1 (Default · Antigravity)',
+        cliEngine: 'agy',
+        createdAt,
+      },
+    ],
+    claude: [
+      {
+        id: 'slot-1',
+        label: 'Account 1 (Default)',
+        cliEngine: 'claude',
+        createdAt,
+      },
+    ],
+  };
+}
+
+export const DEFAULT_AGENT_ROUTES: Record<AgentId, AgentRouteConfig> = {
+  orchestrator: {
+    provider: 'codex',
+    slotId: 'slot-1',
+    model: 'default',
+  },
+  file: {
+    provider: 'gemini_agy',
+    slotId: 'slot-1',
+    model: 'gemini-3.8-flash',
+  },
+  system: {
+    provider: 'gemini_agy',
+    slotId: 'slot-1',
+    model: 'gemini-3.8-flash',
+  },
+  browser: {
+    provider: 'gemini_agy',
+    slotId: 'slot-1',
+    model: 'gemini-3.8-flash',
+  },
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
-  provider: 'gemini_agy',
+  provider: 'codex',
   effort: 'medium',
   selectedModels: {
-    gemini_agy: 'gemini-4-argon',
+    gemini_agy: 'gemini-3.8-flash',
     codex: 'default',
     claude: 'sonnet',
     ollama: 'qwen2.5:7b',
   },
   disconnectedProviders: [],
+  accountSlots: createDefaultAccountSlots(),
+  activeSlots: {
+    codex: 'slot-1',
+    gemini_agy: 'slot-1',
+    claude: 'slot-1',
+  },
+  agentRoutes: {
+    orchestrator: { ...DEFAULT_AGENT_ROUTES.orchestrator },
+    file: { ...DEFAULT_AGENT_ROUTES.file },
+    system: { ...DEFAULT_AGENT_ROUTES.system },
+    browser: { ...DEFAULT_AGENT_ROUTES.browser },
+  },
   userName: 'Nha',
   language: 'en',
   theme: 'midnight',
@@ -119,6 +205,81 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8');
 }
 
+function normalizeAccountSlots(
+  saved?: Partial<Record<CliAccountProvider, AccountSlotConfig[]>>,
+  disconnectedProviders?: string[],
+): Record<CliAccountProvider, AccountSlotConfig[]> {
+  const defaults = createDefaultAccountSlots();
+  const out = {} as Record<CliAccountProvider, AccountSlotConfig[]>;
+
+  (['codex', 'gemini_agy', 'claude'] as CliAccountProvider[]).forEach((prov) => {
+    const defSlot1 = defaults[prov][0];
+    const incoming = Array.isArray(saved?.[prov]) ? saved![prov]! : [];
+    const hasSlot1 = incoming.some((s) => s.id === 'slot-1');
+    const merged: AccountSlotConfig[] = hasSlot1
+      ? incoming.map((s) =>
+          s.id === 'slot-1'
+            ? {
+                ...defSlot1,
+                ...s,
+                id: 'slot-1',
+                cliEngine: prov === 'gemini_agy' ? 'agy' : prov,
+                homeDir: undefined,
+              }
+            : s,
+        )
+      : [
+          {
+            ...defSlot1,
+            disconnected: Boolean(disconnectedProviders?.includes(prov)),
+          },
+          ...incoming,
+        ];
+    out[prov] = merged;
+  });
+
+  return out;
+}
+
+function normalizeAgentRoutes(
+  saved: Partial<Record<AgentId, AgentRouteConfig>> | undefined,
+  slots: Record<CliAccountProvider, AccountSlotConfig[]>,
+  selectedModels: AppSettings['selectedModels'],
+): Record<AgentId, AgentRouteConfig> {
+  const agents: AgentId[] = ['orchestrator', 'file', 'system', 'browser'];
+  const out = {} as Record<AgentId, AgentRouteConfig>;
+
+  for (const agent of agents) {
+    const base = DEFAULT_AGENT_ROUTES[agent];
+    const raw = saved?.[agent];
+    const provider = raw?.provider || base.provider;
+    let slotId = raw?.slotId;
+
+    if (provider === 'codex' || provider === 'gemini_agy' || provider === 'claude') {
+      const provSlots = slots[provider] || [];
+      if (!slotId || !provSlots.some((s) => s.id === slotId)) {
+        slotId = 'slot-1';
+      }
+    } else {
+      slotId = undefined;
+    }
+
+    const fallbackModel =
+      raw?.model ||
+      (agent === 'orchestrator' && provider === 'codex'
+        ? selectedModels?.codex || 'default'
+        : base.model);
+
+    out[agent] = {
+      provider,
+      ...(slotId ? { slotId } : {}),
+      model: fallbackModel,
+    };
+  }
+
+  return out;
+}
+
 export async function loadSettings(): Promise<AppSettings> {
   await ensureDirs();
   const saved = await readJson<Omit<Partial<AppSettings>, 'provider'> & { provider?: string }>(
@@ -132,26 +293,74 @@ export async function loadSettings(): Promise<AppSettings> {
     normalizedProvider = saved.geminiApiKey?.trim() ? 'gemini_api' : 'gemini_agy';
   }
 
+  const selectedModels = {
+    ...DEFAULT_SETTINGS.selectedModels,
+    ...(saved.selectedModels || {}),
+  };
+  const accountSlots = normalizeAccountSlots(saved.accountSlots, saved.disconnectedProviders);
+  const activeSlots: Record<CliAccountProvider, string> = {
+    codex: saved.activeSlots?.codex || 'slot-1',
+    gemini_agy: saved.activeSlots?.gemini_agy || 'slot-1',
+    claude: saved.activeSlots?.claude || 'slot-1',
+  };
+  (['codex', 'gemini_agy', 'claude'] as CliAccountProvider[]).forEach((prov) => {
+    if (!accountSlots[prov].some((s) => s.id === activeSlots[prov])) {
+      activeSlots[prov] = 'slot-1';
+    }
+  });
+
+  const agentRoutes = normalizeAgentRoutes(saved.agentRoutes, accountSlots, selectedModels);
+
   return {
     ...DEFAULT_SETTINGS,
     ...saved,
     provider: (normalizedProvider as AppSettings['provider']) || DEFAULT_SETTINGS.provider,
-    selectedModels: {
-      ...DEFAULT_SETTINGS.selectedModels,
-      ...(saved.selectedModels || {}),
-    },
+    selectedModels,
+    accountSlots,
+    activeSlots,
+    agentRoutes,
   };
 }
 
 export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
   const current = await loadSettings();
+  const nextSelectedModels = {
+    ...current.selectedModels,
+    ...(patch.selectedModels || {}),
+  };
+  const nextAccountSlots = normalizeAccountSlots(
+    {
+      ...current.accountSlots,
+      ...(patch.accountSlots || {}),
+    },
+    patch.disconnectedProviders ?? current.disconnectedProviders,
+  );
+  const nextActiveSlots: Record<CliAccountProvider, string> = {
+    codex: patch.activeSlots?.codex || current.activeSlots?.codex || 'slot-1',
+    gemini_agy: patch.activeSlots?.gemini_agy || current.activeSlots?.gemini_agy || 'slot-1',
+    claude: patch.activeSlots?.claude || current.activeSlots?.claude || 'slot-1',
+  };
+  (['codex', 'gemini_agy', 'claude'] as CliAccountProvider[]).forEach((prov) => {
+    if (!nextAccountSlots[prov].some((s) => s.id === nextActiveSlots[prov])) {
+      nextActiveSlots[prov] = 'slot-1';
+    }
+  });
+  const nextAgentRoutes = normalizeAgentRoutes(
+    {
+      ...current.agentRoutes,
+      ...(patch.agentRoutes || {}),
+    },
+    nextAccountSlots,
+    nextSelectedModels,
+  );
+
   const next: AppSettings = {
     ...current,
     ...patch,
-    selectedModels: {
-      ...current.selectedModels,
-      ...(patch.selectedModels || {}),
-    },
+    selectedModels: nextSelectedModels,
+    accountSlots: nextAccountSlots,
+    activeSlots: nextActiveSlots,
+    agentRoutes: nextAgentRoutes,
   };
   await writeJson(SETTINGS_FILE, next);
   return next;

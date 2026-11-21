@@ -305,24 +305,53 @@ export function App() {
   };
 
   const handleSelectProvider = async (nextProvider: ProviderType) => {
-    if (nextProvider === settings.provider) return;
+    const activeAgentId: AgentId = targetMode === 'auto' ? 'orchestrator' : targetMode;
+    const prevRouteProvider = settings.agentRoutes?.[activeAgentId]?.provider || settings.provider;
+    if (nextProvider === prevRouteProvider && nextProvider === settings.provider) return;
+
     const prevName =
-      providers.find((p) => p.id === settings.provider)?.name || settings.provider;
+      providers.find((p) => p.id === prevRouteProvider)?.name || prevRouteProvider;
     const nextMeta = providers.find((p) => p.id === nextProvider);
     const nextName = nextMeta?.name || nextProvider;
 
+    const isCliProv = nextProvider === 'codex' || nextProvider === 'gemini_agy' || nextProvider === 'claude';
+    const nextSlotId = isCliProv
+      ? settings.activeSlots?.[nextProvider] || nextMeta?.activeSlotId || 'slot-1'
+      : undefined;
+    const nextSlot = isCliProv
+      ? nextMeta?.slots?.find((s) => s.id === nextSlotId) || nextMeta?.slots?.[0]
+      : undefined;
+
     const existingModel = settings.selectedModels?.[nextProvider];
-    const defaultModel = existingModel || nextMeta?.defaultModel;
+    const defaultModel =
+      nextSlot?.defaultModel || existingModel || nextMeta?.defaultModel || 'default';
+
+    const currentRoutes = settings.agentRoutes || {
+      orchestrator: { provider: 'codex', slotId: 'slot-1', model: 'default' },
+      file: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+      system: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+      browser: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+    };
+
+    const nextRoutes = {
+      ...currentRoutes,
+      [activeAgentId]: {
+        provider: nextProvider,
+        ...(nextSlotId ? { slotId: nextSlotId } : {}),
+        model: defaultModel,
+      },
+    };
 
     await patchSettings({
-      provider: nextProvider,
+      ...(activeAgentId === 'orchestrator' ? { provider: nextProvider } : {}),
+      agentRoutes: nextRoutes,
       ...(defaultModel
         ? { selectedModels: { ...settings.selectedModels, [nextProvider]: defaultModel } }
         : {}),
     });
 
     // Insert a clean inline handoff divider if the active session already has messages
-    if (activeSession && activeSession.messages.length > 0) {
+    if (activeSession && activeSession.messages.length > 0 && prevRouteProvider !== nextProvider) {
       const dividerText = t(settings.language).switchedNotice(prevName, nextName);
       try {
         const res = await api.recordHandoff(activeSession.id, {
@@ -340,8 +369,24 @@ export function App() {
   };
 
   const handleSelectModel = async (provider: ProviderType, modelId: string) => {
+    const activeAgentId: AgentId = targetMode === 'auto' ? 'orchestrator' : targetMode;
+    const currentRoutes = settings.agentRoutes || {
+      orchestrator: { provider: 'codex', slotId: 'slot-1', model: 'default' },
+      file: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+      system: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+      browser: { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' },
+    };
+    const existingRoute = currentRoutes[activeAgentId];
     const patch: Partial<AppSettings> = {
       selectedModels: { ...settings.selectedModels, [provider]: modelId },
+      agentRoutes: {
+        ...currentRoutes,
+        [activeAgentId]: {
+          ...existingRoute,
+          provider,
+          model: modelId,
+        },
+      },
     };
     if (provider === 'ollama') patch.ollamaModel = modelId;
     await patchSettings(patch);
@@ -438,9 +483,10 @@ export function App() {
     setPendingApprovals((prev) => prev.filter((a) => a.id !== approvalId));
   };
 
-  const handleTriggerLogin = async (provider: ProviderType) => {
-    const res = await api.loginProvider(provider);
+  const handleTriggerLogin = async (provider: ProviderType, slotId?: string) => {
+    const res = await api.loginProvider(provider, slotId);
     setProviders(res.providers);
+    if (res.settings) setSettings(res.settings);
   };
 
   const handleTogglePin = async (messageId: string) => {

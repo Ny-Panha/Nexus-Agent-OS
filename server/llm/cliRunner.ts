@@ -3,28 +3,44 @@ import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import type {
+  AccountSlotConfig,
+  AccountSlotStatus,
   AgentId,
+  AgentRouteConfig,
   AppSettings,
   AuditLogEntry,
   ChatSession,
+  CliAccountProvider,
+  CliEngineKind,
   EffortLevel,
   ModelOption,
   NeedsAttentionAction,
   ProviderType,
+  SafetyMode,
   ServerWsEvent,
   TargetMode,
   TokenUsageStats,
   ToolCallTrace,
 } from '../../shared/types.js';
 import { appendAuditLog } from '../store/storage.js';
-import { getSingleProviderStatus, resolveBinaryPath } from './providerRegistry.js';
+import {
+  buildSlotEnv,
+  getSlotStatus,
+  resolveBinaryPath,
+  resolveGeminiCliBinary,
+} from './providerRegistry.js';
 
 export interface CliRunOutput {
   text: string;
   toolTraces: ToolCallTrace[];
   usage?: TokenUsageStats;
+  provider: ProviderType;
+  slotId: string;
+  slotLabel: string;
+  cliEngine: CliEngineKind;
   modelUsed: string;
   needsAttention?: {
+    reason: 'signed_out' | 'quota_exceeded' | 'cli_missing' | 'error';
     message: string;
     action: NeedsAttentionAction;
   };
@@ -47,12 +63,16 @@ function buildConversationPrompt(params: {
   target: TargetMode;
   settings: AppSettings;
   includeHistory: boolean;
+  customPrompt?: string;
 }): string {
-  const { session, prompt, target, settings, includeHistory } = params;
+  const { session, prompt, target, settings, includeHistory, customPrompt } = params;
+  if (customPrompt) {
+    return customPrompt;
+  }
+
   const userName = settings.userName?.trim() || os.userInfo().username;
 
   if (!includeHistory) {
-    // Warm persistent worker already holds prior turns in memory!
     return prompt;
   }
 
@@ -96,14 +116,77 @@ function estimateTokens(text: string): number {
 function mapProviderTitle(provider: ProviderType): string {
   if (provider === 'claude') return 'Claude Code';
   if (provider === 'codex') return 'Codex (ChatGPT)';
-  if (provider === 'gemini_agy') return 'Gemini (Antigravity)';
+  if (provider === 'gemini_agy') return 'Gemini';
   if (provider === 'ollama') return 'Local AI';
   return provider;
 }
 
+function classifyCliError(errMsg: string): 'signed_out' | 'quota_exceeded' | 'error' {
+  if (
+    /not logged in|please set an auth method|sign in|login required|unauthorized|unauthenticated|invalid_grant|code["':\s]+41\b/i.test(
+      errMsg,
+    )
+  ) {
+    return 'signed_out';
+  }
+  if (
+    /quota|resource_exhausted|rate.?limit|too many requests|usage limit|limit reached|\b429\b/i.test(
+      errMsg,
+    )
+  ) {
+    return 'quota_exceeded';
+  }
+  return 'error';
+}
+
+function buildSlotAttention(params: {
+  reason: 'signed_out' | 'quota_exceeded' | 'cli_missing';
+  agent: AgentId;
+  provider: CliAccountProvider;
+  slotId: string;
+  slotLabel: string;
+  cliEngine: CliEngineKind;
+  modelUsed: string;
+  message: string;
+  toolTraces: ToolCallTrace[];
+}): CliRunOutput {
+  const { reason, agent, provider, slotId, slotLabel, cliEngine, modelUsed, message, toolTraces } = params;
+  const provTitle = mapProviderTitle(provider);
+  const actionLabel =
+    reason === 'cli_missing'
+      ? `Open AI Accounts (${provTitle})`
+      : reason === 'quota_exceeded'
+        ? `Sign in / Switch ${provTitle} (${slotLabel})`
+        : `Sign in to ${provTitle} (${slotLabel})`;
+
+  return {
+    text: message,
+    toolTraces,
+    provider,
+    slotId,
+    slotLabel,
+    cliEngine,
+    modelUsed,
+    needsAttention: {
+      reason,
+      message,
+      action: {
+        type: reason === 'cli_missing' ? 'open_settings' : 'login',
+        provider,
+        slotId,
+        slotLabel,
+        agent,
+        reason,
+        label: actionLabel,
+        detail: `${provTitle} · ${slotLabel}`,
+      },
+    },
+  };
+}
+
 /**
  * Resolves a base model + effort level into an exact valid `agy` model ID so
- * `--model` and `--effort` NEVER conflict (e.g., gemini-3.8-flash + max -> gemini-3.8-flash-high).
+ * `--model` and `--effort` NEVER conflict.
  */
 export function resolveAgyModelVariant(
   selectedModel: string,
@@ -130,7 +213,6 @@ export function resolveAgyModelVariant(
     }
   }
 
-  // If model already encodes an effort suffix, never pass --effort alongside it
   if (suffixRe.test(selectedModel)) {
     return { modelId: selectedModel, passEffortFlag: false };
   }
@@ -139,11 +221,13 @@ export function resolveAgyModelVariant(
 }
 
 // ---------------------------------------------------------------------------
-// Warm Persistent `agy` Worker Pool (eliminates 20s cold-start on follow-up turns)
+// Warm Persistent `agy` Worker Pool (isolated per session + agent + slot)
 // ---------------------------------------------------------------------------
 interface WarmAgyWorker {
   key: string;
   sessionId: string;
+  agentId: AgentId;
+  slotId: string;
   modelId: string;
   child: ChildProcess;
   busy: boolean;
@@ -154,7 +238,8 @@ interface WarmAgyWorker {
     emit: (event: ServerWsEvent) => void;
     activeAgent: AgentId;
     toolTraces: ToolCallTrace[];
-    safetyMode: AppSettings['safetyMode'];
+    safetyMode: SafetyMode;
+    streamToChat: boolean;
     streamedDelta: string;
     resolve: (res: { text: string; usage?: TokenUsageStats; error?: string }) => void;
     reject: (err: Error) => void;
@@ -167,6 +252,14 @@ const WORKER_IDLE_MS = 10 * 60 * 1000;
 export function disposeWarmWorkersForSession(sessionId: string): void {
   for (const [k, w] of warmAgyPool.entries()) {
     if (w.sessionId === sessionId) {
+      destroyWarmWorker(k, w);
+    }
+  }
+}
+
+export function disposeWarmWorkersForSlot(slotId: string): void {
+  for (const [k, w] of warmAgyPool.entries()) {
+    if (w.slotId === slotId) {
       destroyWarmWorker(k, w);
     }
   }
@@ -196,12 +289,17 @@ function destroyWarmWorker(key: string, worker: WarmAgyWorker, reason?: string):
 
 function getOrCreateWarmAgyWorker(params: {
   sessionId: string;
+  agentId: AgentId;
+  slotId: string;
   binary: string;
   workspace: string;
   modelId: string;
-  safetyMode: AppSettings['safetyMode'];
+  safetyMode: SafetyMode;
+  planningOnly: boolean;
+  env: NodeJS.ProcessEnv;
 }): { worker: WarmAgyWorker; isNew: boolean } {
-  const key = `${params.sessionId}::${params.modelId}::${params.safetyMode}`;
+  const modeKey = params.planningOnly ? 'plan_only' : params.safetyMode;
+  const key = `${params.sessionId}::${params.agentId}::${params.slotId}::${params.modelId}::${modeKey}`;
   const existing = warmAgyPool.get(key);
   if (existing && !existing.child.killed && existing.child.exitCode === null && !existing.busy) {
     if (existing.idleTimer) clearTimeout(existing.idleTimer);
@@ -209,9 +307,14 @@ function getOrCreateWarmAgyWorker(params: {
     return { worker: existing, isNew: false };
   }
 
-  // Close any previous worker for the same session with a different model/mode
-  disposeWarmWorkersForSession(params.sessionId);
+  // Only replace stale workers for the same (session, agent, slot) so other agents keep their warm workers!
+  for (const [k, w] of warmAgyPool.entries()) {
+    if (w.sessionId === params.sessionId && w.agentId === params.agentId && w.slotId === params.slotId) {
+      destroyWarmWorker(k, w);
+    }
+  }
 
+  // Verified agy.exe flags: --input-format, --output-format, --model, --mode (accept-edits|auto|plan), --sandbox, --dangerously-skip-permissions, -p=
   const args: string[] = [
     '--input-format',
     'stream-json',
@@ -220,12 +323,14 @@ function getOrCreateWarmAgyWorker(params: {
     '--model',
     params.modelId,
   ];
-  if (params.safetyMode === 'read_only') {
+  if (params.planningOnly || params.safetyMode === 'read_only') {
     args.push('--mode', 'plan');
+  } else if (params.safetyMode === 'safe') {
+    args.push('--mode', 'plan', '--sandbox');
   } else if (params.safetyMode === 'full_auto') {
     args.push('--dangerously-skip-permissions');
   } else {
-    args.push('--mode', 'accept-edits');
+    args.push('--mode', 'accept-edits', '--sandbox');
   }
   args.push('-p=');
 
@@ -233,12 +338,14 @@ function getOrCreateWarmAgyWorker(params: {
     cwd: params.workspace,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env },
+    env: params.env,
   });
 
   const worker: WarmAgyWorker = {
     key,
     sessionId: params.sessionId,
+    agentId: params.agentId,
+    slotId: params.slotId,
     modelId: params.modelId,
     child,
     busy: false,
@@ -268,12 +375,14 @@ function getOrCreateWarmAgyWorker(params: {
       const stepType = String(stepUpd.step_type || '');
       if (stepType === 'agent_response' && typeof stepUpd.text_delta === 'string') {
         turn.streamedDelta += stepUpd.text_delta;
-        turn.emit({
-          type: 'stream_delta',
-          sessionId: worker.sessionId,
-          agent: turn.activeAgent,
-          delta: stepUpd.text_delta,
-        });
+        if (turn.streamToChat) {
+          turn.emit({
+            type: 'stream_delta',
+            sessionId: worker.sessionId,
+            agent: turn.activeAgent,
+            delta: stepUpd.text_delta,
+          });
+        }
       } else if (stepType && stepType !== 'user_input' && stepType !== 'agent_response') {
         const toolName = String(stepUpd.tool_name || stepType);
         const stepId = `agy-step-${String(stepUpd.step_index ?? turn.toolTraces.length)}`;
@@ -338,7 +447,6 @@ function getOrCreateWarmAgyWorker(params: {
       worker.lastUsedAt = Date.now();
       worker.idleTimer = setTimeout(() => destroyWarmWorker(key, worker), WORKER_IDLE_MS);
 
-      // If result returned status ERROR (e.g. quota reached), surface it as error
       if (resultObj && String(resultObj.status || '').toUpperCase() === 'ERROR' && !responseText) {
         turn.resolve({
           text: '',
@@ -385,126 +493,131 @@ function getOrCreateWarmAgyWorker(params: {
   return { worker, isNew: true };
 }
 
+// ---------------------------------------------------------------------------
+// Main CLI Entrypoint (Per-Agent + Per-Slot Aware)
+// ---------------------------------------------------------------------------
+
 export async function runCliProviderMission(params: {
   session: ChatSession;
   prompt: string;
   target: TargetMode;
+  agentId?: AgentId;
+  route?: AgentRouteConfig;
   settings: AppSettings;
+  customPrompt?: string;
+  planningOnly?: boolean;
+  streamToChat?: boolean;
   emit: (event: ServerWsEvent) => void;
   signal: AbortSignal;
 }): Promise<CliRunOutput> {
-  const { session, prompt, target, settings, emit, signal } = params;
-  const provider = settings.provider;
-  const activeAgent: AgentId = target === 'auto' ? 'orchestrator' : target;
-  const status = await getSingleProviderStatus(provider, settings, false);
-  const binary = status?.binaryPath || (await resolveBinaryPath(provider));
+  const {
+    session,
+    prompt,
+    target,
+    settings,
+    customPrompt,
+    planningOnly = false,
+    streamToChat = true,
+    emit,
+    signal,
+  } = params;
+
+  const activeAgent: AgentId = params.agentId || (target === 'auto' ? 'orchestrator' : target);
+  const provider = (params.route?.provider || settings.provider) as CliAccountProvider;
+  const requestedSlotId = params.route?.slotId || settings.activeSlots?.[provider] || 'slot-1';
+
+  const { slotConfig, slotStatus } = await getSlotStatus(provider, requestedSlotId, settings, false);
+  const cliEngine: CliEngineKind = slotConfig.cliEngine;
+  const slotId = slotConfig.id;
+  const slotLabel = slotConfig.label;
+
+  const binary =
+    slotStatus?.binaryPath ||
+    (cliEngine === 'gemini_cli'
+      ? await resolveGeminiCliBinary()
+      : await resolveBinaryPath(provider));
 
   const selectedModel =
+    params.route?.model ||
     settings.selectedModels?.[provider] ||
-    status?.defaultModel ||
-    (provider === 'claude' ? 'sonnet' : provider === 'codex' ? 'default' : 'gemini-3.8-flash');
+    slotStatus?.defaultModel ||
+    (provider === 'claude'
+      ? 'sonnet'
+      : provider === 'codex'
+        ? 'default'
+        : cliEngine === 'gemini_cli'
+          ? 'gemini-2.5-flash'
+          : 'gemini-3.8-flash');
 
-  if (!binary || !status?.installed) {
-    return {
-      text: `${mapProviderTitle(provider)} CLI is not installed on this computer.`,
-      toolTraces: [],
+  if (!binary || !slotStatus?.installed) {
+    return buildSlotAttention({
+      reason: 'cli_missing',
+      agent: activeAgent,
+      provider,
+      slotId,
+      slotLabel,
+      cliEngine,
       modelUsed: selectedModel,
-      needsAttention: {
-        message: `${mapProviderTitle(provider)} CLI is not installed on this computer. Switch to a signed-in provider or open AI Accounts in Settings.`,
-        action: {
-          type: 'open_settings',
-          provider,
-          label: 'Open AI Accounts',
-        },
-      },
-    };
+      message: `${mapProviderTitle(provider)} (${slotLabel}) CLI is not installed on this computer.`,
+      toolTraces: [],
+    });
   }
 
-  if (!status.signedIn) {
-    return {
-      text: status.error || `${mapProviderTitle(provider)} is not signed in.`,
-      toolTraces: [],
+  if (!slotStatus.signedIn) {
+    return buildSlotAttention({
+      reason: 'signed_out',
+      agent: activeAgent,
+      provider,
+      slotId,
+      slotLabel,
+      cliEngine,
       modelUsed: selectedModel,
-      needsAttention: {
-        message:
-          status.error ||
-          `${mapProviderTitle(provider)} profile is not signed in. Sign in with your account, then retry your message.`,
-        action: {
-          type: 'login',
-          provider,
-          label: status.loginActionLabel || `Sign in to ${mapProviderTitle(provider)}`,
-        },
-      },
-    };
+      message:
+        slotStatus.error ||
+        `${mapProviderTitle(provider)} ${slotLabel} is not signed in. Sign in to this account slot, then retry.`,
+      toolTraces: [],
+    });
   }
 
   const workspace = safeWorkspaceDir(settings.defaultWorkspace);
+  const env = buildSlotEnv(provider, slotConfig);
   const toolTraces: ToolCallTrace[] = [];
 
-  if (provider === 'gemini_agy') {
-    const resolved = resolveAgyModelVariant(selectedModel, settings.effort, status.models);
+  if (cliEngine === 'agy') {
+    const resolved = resolveAgyModelVariant(selectedModel, settings.effort, slotStatus.models);
     emit({
       type: 'agent_state',
       agent: activeAgent,
       state: 'thinking',
-      detail: `Gemini · ${resolved.modelId}`,
+      detail: `${slotLabel} · ${resolved.modelId}`,
     });
 
-    try {
-      return await runWarmAgyTurn({
-        binary,
-        workspace,
-        session,
-        prompt,
-        target,
-        modelId: resolved.modelId,
-        settings,
-        activeAgent,
-        toolTraces,
-        emit,
-        signal,
-      });
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      // Automatic fallback if selected Antigravity model hits individual quota (429 RESOURCE_EXHAUSTED)
-      if (/quota reached|RESOURCE_EXHAUSTED|429/i.test(errMsg)) {
-        const fallbackCandidates = ['gemini-4-argon', 'gemini-4-hydrogen', 'gemini-4-neon', 'gpt-oss-120b'];
-        const currentBase = resolved.modelId.replace(/-(low|medium|high|xhigh|max)$/i, '');
-        const nextBase = fallbackCandidates.find(
-          (c) => c !== currentBase && status.models.some((m) => m.id === c),
-        );
-        if (nextBase) {
-          const fallbackResolved = resolveAgyModelVariant(nextBase, settings.effort, status.models);
-          emit({
-            type: 'assistant_note',
-            sessionId: session.id,
-            agent: activeAgent,
-            text: `Quota reached on ${resolved.modelId} — automatically switching to ${fallbackResolved.modelId}...`,
-          });
-          return runWarmAgyTurn({
-            binary,
-            workspace,
-            session,
-            prompt,
-            target,
-            modelId: fallbackResolved.modelId,
-            settings,
-            activeAgent,
-            toolTraces,
-            emit,
-            signal,
-          });
-        }
-      }
-      throw err;
-    }
+    return runWarmAgyTurn({
+      binary,
+      workspace,
+      session,
+      prompt,
+      target,
+      customPrompt,
+      planningOnly,
+      streamToChat,
+      modelId: resolved.modelId,
+      slotConfig,
+      slotStatus,
+      env,
+      settings,
+      activeAgent,
+      toolTraces,
+      emit,
+      signal,
+    });
   }
 
   emit({
     type: 'agent_state',
     agent: activeAgent,
     state: 'thinking',
-    detail: `${mapProviderTitle(provider)} · ${selectedModel}`,
+    detail: `${mapProviderTitle(provider)} (${slotLabel}) · ${selectedModel}`,
   });
 
   const fullPrompt = buildConversationPrompt({
@@ -512,16 +625,40 @@ export async function runCliProviderMission(params: {
     prompt,
     target,
     settings,
-    includeHistory: true,
+    includeHistory: !customPrompt,
+    customPrompt,
   });
 
-  if (provider === 'codex') {
+  if (cliEngine === 'gemini_cli') {
+    return runGeminiCli({
+      binary,
+      workspace,
+      fullPrompt,
+      model: selectedModel,
+      slotConfig,
+      env,
+      settings,
+      planningOnly,
+      streamToChat,
+      sessionId: session.id,
+      activeAgent,
+      toolTraces,
+      emit,
+      signal,
+    });
+  }
+
+  if (cliEngine === 'codex') {
     return runCodexCli({
       binary,
       workspace,
       fullPrompt,
       model: selectedModel,
+      slotConfig,
+      env,
       settings,
+      planningOnly,
+      streamToChat,
       sessionId: session.id,
       activeAgent,
       toolTraces,
@@ -530,13 +667,17 @@ export async function runCliProviderMission(params: {
     });
   }
 
-  if (provider === 'claude') {
+  if (cliEngine === 'claude') {
     return runClaudeCli({
       binary,
       workspace,
       fullPrompt,
       model: selectedModel,
+      slotConfig,
+      env,
       settings,
+      planningOnly,
+      streamToChat,
       sessionId: session.id,
       activeAgent,
       toolTraces,
@@ -545,8 +686,12 @@ export async function runCliProviderMission(params: {
     });
   }
 
-  throw new Error(`Unsupported CLI provider: ${provider}`);
+  throw new Error(`Unsupported CLI engine: ${cliEngine}`);
 }
+
+// ---------------------------------------------------------------------------
+// 1. Antigravity CLI (`agy.exe`) — Slot 1
+// ---------------------------------------------------------------------------
 
 async function runWarmAgyTurn(params: {
   binary: string;
@@ -554,22 +699,48 @@ async function runWarmAgyTurn(params: {
   session: ChatSession;
   prompt: string;
   target: TargetMode;
+  customPrompt?: string;
+  planningOnly: boolean;
+  streamToChat: boolean;
   modelId: string;
+  slotConfig: AccountSlotConfig;
+  slotStatus: AccountSlotStatus;
+  env: NodeJS.ProcessEnv;
   settings: AppSettings;
   activeAgent: AgentId;
   toolTraces: ToolCallTrace[];
   emit: (event: ServerWsEvent) => void;
   signal: AbortSignal;
 }): Promise<CliRunOutput> {
-  const { binary, workspace, session, prompt, target, modelId, settings, activeAgent, toolTraces, emit, signal } =
-    params;
+  const {
+    binary,
+    workspace,
+    session,
+    prompt,
+    target,
+    customPrompt,
+    planningOnly,
+    streamToChat,
+    modelId,
+    slotConfig,
+    env,
+    settings,
+    activeAgent,
+    toolTraces,
+    emit,
+    signal,
+  } = params;
 
   const { worker, isNew } = getOrCreateWarmAgyWorker({
     sessionId: session.id,
+    agentId: activeAgent,
+    slotId: slotConfig.id,
     binary,
     workspace,
     modelId,
     safetyMode: settings.safetyMode,
+    planningOnly,
+    env,
   });
 
   const messageText = buildConversationPrompt({
@@ -577,7 +748,8 @@ async function runWarmAgyTurn(params: {
     prompt,
     target,
     settings,
-    includeHistory: isNew,
+    includeHistory: isNew && !customPrompt,
+    customPrompt,
   });
 
   const startedAt = Date.now();
@@ -600,6 +772,7 @@ async function runWarmAgyTurn(params: {
         activeAgent,
         toolTraces,
         safetyMode: settings.safetyMode,
+        streamToChat,
         streamedDelta: '',
         resolve: (res) => {
           signal.removeEventListener('abort', onAbort);
@@ -631,16 +804,19 @@ async function runWarmAgyTurn(params: {
   );
 
   if (result.error && !result.text) {
-    if (/sign in|login|auth|unauthorized|credential/i.test(result.error)) {
-      return {
-        text: result.error,
-        toolTraces,
+    const kind = classifyCliError(result.error);
+    if (kind === 'signed_out' || kind === 'quota_exceeded') {
+      return buildSlotAttention({
+        reason: kind,
+        agent: activeAgent,
+        provider: 'gemini_agy',
+        slotId: slotConfig.id,
+        slotLabel: slotConfig.label,
+        cliEngine: 'agy',
         modelUsed: modelId,
-        needsAttention: {
-          message: result.error.slice(0, 320),
-          action: { type: 'login', provider: 'gemini_agy', label: 'Sign in with Google' },
-        },
-      };
+        message: `${slotConfig.label} (${modelId}): ${result.error.slice(0, 320)}`,
+        toolTraces,
+      });
     }
     throw new Error(result.error);
   }
@@ -655,25 +831,253 @@ async function runWarmAgyTurn(params: {
     estimated: true,
   };
 
-  await recordCliAudit(session.id, activeAgent, `gemini_agy:${modelId}`, Date.now() - startedAt, finalText, emit);
+  await recordCliAudit(
+    session.id,
+    activeAgent,
+    `agy[${slotConfig.id}]:${modelId}`,
+    `${slotConfig.label} (Antigravity) · ${planningOnly ? 'plan' : settings.safetyMode}`,
+    Date.now() - startedAt,
+    finalText,
+    emit,
+  );
 
-  return { text: finalText, toolTraces, usage, modelUsed: modelId };
+  return {
+    text: finalText,
+    toolTraces,
+    usage,
+    provider: 'gemini_agy',
+    slotId: slotConfig.id,
+    slotLabel: slotConfig.label,
+    cliEngine: 'agy',
+    modelUsed: modelId,
+  };
 }
 
-async function runCodexCli(params: {
+// ---------------------------------------------------------------------------
+// 2. Official Gemini CLI (`gemini` v0.68.0) — Isolated Slot 2+
+// ---------------------------------------------------------------------------
+
+async function runGeminiCli(params: {
   binary: string;
   workspace: string;
   fullPrompt: string;
   model: string;
+  slotConfig: AccountSlotConfig;
+  env: NodeJS.ProcessEnv;
   settings: AppSettings;
+  planningOnly: boolean;
+  streamToChat: boolean;
   sessionId: string;
   activeAgent: AgentId;
   toolTraces: ToolCallTrace[];
   emit: (event: ServerWsEvent) => void;
   signal: AbortSignal;
 }): Promise<CliRunOutput> {
-  const { binary, workspace, fullPrompt, model, settings, sessionId, activeAgent, toolTraces, emit, signal } = params;
+  const {
+    binary,
+    workspace,
+    fullPrompt,
+    model,
+    slotConfig,
+    env,
+    settings,
+    planningOnly,
+    streamToChat,
+    sessionId,
+    activeAgent,
+    toolTraces,
+    emit,
+    signal,
+  } = params;
 
+  // Verified gemini --help flags: -p/--prompt, -m/--model, -o stream-json, --approval-mode (default|auto_edit|yolo|plan), -s/--sandbox
+  const args: string[] = ['-p', '', '-o', 'stream-json'];
+  if (model && model !== 'default' && model !== 'auto') {
+    args.push('-m', model);
+  }
+
+  if (planningOnly || settings.safetyMode === 'read_only') {
+    args.push('--approval-mode', 'plan');
+  } else if (settings.safetyMode === 'safe') {
+    args.push('--approval-mode', 'plan', '-s');
+  } else if (settings.safetyMode === 'full_auto') {
+    args.push('--approval-mode', 'yolo');
+  } else {
+    args.push('--approval-mode', 'auto_edit');
+  }
+
+  const startedAt = Date.now();
+  let streamedText = '';
+  let finalResponse = '';
+  let lastErrorText = '';
+  let usage: TokenUsageStats | undefined;
+
+  const res = await spawnJsonStream({
+    binary,
+    args,
+    cwd: workspace,
+    env,
+    stdinText: fullPrompt,
+    signal,
+    onJsonEvent: (ev) => {
+      const evType = String(ev.type || ev.event || '');
+      if (evType === 'message') {
+        const role = String(ev.role || '');
+        const content = typeof ev.content === 'string' ? ev.content : '';
+        if (role === 'assistant' && content) {
+          if (ev.delta) {
+            streamedText += content;
+            if (streamToChat) {
+              emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: content });
+            }
+          } else {
+            finalResponse = content;
+            if (streamToChat && !streamedText) {
+              emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: content });
+            }
+          }
+        }
+      } else if (evType === 'tool_use') {
+        const toolName = String(ev.tool_name || ev.name || 'gemini_tool');
+        const trace: ToolCallTrace = {
+          id: String(ev.tool_id || ev.id || randomUUID()),
+          sessionId,
+          agent: activeAgent,
+          toolName,
+          args: (ev.parameters as Record<string, unknown>) || (ev.args as Record<string, unknown>) || {},
+          risk: settings.safetyMode === 'read_only' ? 'read' : 'write',
+          status: 'running',
+          startedAt: new Date().toISOString(),
+        };
+        toolTraces.push(trace);
+        emit({ type: 'tool_event', sessionId, trace });
+        emit({ type: 'agent_state', agent: activeAgent, state: 'running_tool', detail: toolName });
+      } else if (evType === 'tool_result') {
+        const tid = String(ev.tool_id || ev.id || '');
+        const hit = toolTraces.find((t) => t.id === tid) || toolTraces[toolTraces.length - 1];
+        if (hit) {
+          hit.status = ev.status === 'error' ? 'error' : 'completed';
+          if (typeof ev.output === 'string') hit.output = ev.output.slice(0, 1400);
+          hit.finishedAt = new Date().toISOString();
+          emit({ type: 'tool_event', sessionId, trace: { ...hit } });
+        }
+      } else if (evType === 'error') {
+        const msg =
+          typeof ev.message === 'string'
+            ? ev.message
+            : typeof (ev.error as Record<string, unknown> | undefined)?.message === 'string'
+              ? String((ev.error as Record<string, unknown>).message)
+              : '';
+        if (msg) lastErrorText = msg;
+      } else if (evType === 'result') {
+        if (typeof ev.response === 'string' && ev.response.trim()) {
+          finalResponse = ev.response.trim();
+        }
+        const stats = ev.stats as Record<string, number> | undefined;
+        if (stats && (typeof stats.input_tokens === 'number' || typeof stats.output_tokens === 'number')) {
+          usage = {
+            inputTokens: Number(stats.input_tokens || stats.input || 0),
+            cachedInputTokens: Number(stats.cached || 0),
+            cacheWriteTokens: 0,
+            outputTokens: Number(stats.output_tokens || 0),
+            contextWindow: 1_048_576,
+          };
+        }
+      }
+    },
+  });
+
+  const text = (finalResponse || streamedText).trim();
+  if (!text && (res.exitCode !== 0 || lastErrorText)) {
+    const errMsg = (lastErrorText || res.rawStderr || res.rawStdout || 'Gemini CLI execution failed.').trim();
+    const kind = classifyCliError(errMsg);
+    if (kind === 'signed_out' || kind === 'quota_exceeded') {
+      return buildSlotAttention({
+        reason: kind,
+        agent: activeAgent,
+        provider: 'gemini_agy',
+        slotId: slotConfig.id,
+        slotLabel: slotConfig.label,
+        cliEngine: 'gemini_cli',
+        modelUsed: model,
+        message: `${slotConfig.label} (${model}): ${errMsg.slice(0, 320)}`,
+        toolTraces,
+      });
+    }
+    throw new Error(errMsg.slice(0, 500));
+  }
+
+  if (!usage) {
+    usage = {
+      inputTokens: estimateTokens(fullPrompt),
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: estimateTokens(text),
+      contextWindow: 1_048_576,
+      estimated: true,
+    };
+  }
+
+  await recordCliAudit(
+    sessionId,
+    activeAgent,
+    `gemini_cli[${slotConfig.id}]:${model}`,
+    `${slotConfig.label} (Gemini CLI) · ${planningOnly ? 'plan' : settings.safetyMode}`,
+    Date.now() - startedAt,
+    text,
+    emit,
+  );
+
+  return {
+    text: text || 'Done.',
+    toolTraces,
+    usage,
+    provider: 'gemini_agy',
+    slotId: slotConfig.id,
+    slotLabel: slotConfig.label,
+    cliEngine: 'gemini_cli',
+    modelUsed: model,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 3. Official Codex CLI (`codex.exe` v0.169.0) — Per-Slot CODEX_HOME
+// ---------------------------------------------------------------------------
+
+async function runCodexCli(params: {
+  binary: string;
+  workspace: string;
+  fullPrompt: string;
+  model: string;
+  slotConfig: AccountSlotConfig;
+  env: NodeJS.ProcessEnv;
+  settings: AppSettings;
+  planningOnly: boolean;
+  streamToChat: boolean;
+  sessionId: string;
+  activeAgent: AgentId;
+  toolTraces: ToolCallTrace[];
+  emit: (event: ServerWsEvent) => void;
+  signal: AbortSignal;
+}): Promise<CliRunOutput> {
+  const {
+    binary,
+    workspace,
+    fullPrompt,
+    model,
+    slotConfig,
+    env,
+    settings,
+    planningOnly,
+    streamToChat,
+    sessionId,
+    activeAgent,
+    toolTraces,
+    emit,
+    signal,
+  } = params;
+
+  // Verified codex exec --help flags: --skip-git-repo-check, --ephemeral, -C, --json, -m, -c, -s, --dangerously-bypass-approvals-and-sandbox
   const args: string[] = ['exec', '--skip-git-repo-check', '--ephemeral', '-C', workspace, '--json'];
   if (model && model !== 'default') {
     args.push('-m', model);
@@ -687,7 +1091,7 @@ async function runCodexCli(params: {
   };
   args.push('-c', `model_reasoning_effort="${effortMap[settings.effort] || 'medium'}"`);
 
-  if (settings.safetyMode === 'read_only') {
+  if (planningOnly || settings.safetyMode === 'read_only' || settings.safetyMode === 'safe') {
     args.push('-s', 'read-only');
   } else if (settings.safetyMode === 'full_auto') {
     args.push('--dangerously-bypass-approvals-and-sandbox');
@@ -706,6 +1110,7 @@ async function runCodexCli(params: {
     binary,
     args,
     cwd: workspace,
+    env,
     stdinText: fullPrompt,
     signal,
     onJsonEvent: (ev) => {
@@ -716,7 +1121,9 @@ async function runCodexCli(params: {
         const itemType = String(item.type || '');
         if (itemType === 'agent_message' && typeof item.text === 'string') {
           agentMessages.push(item.text);
-          emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: item.text });
+          if (streamToChat) {
+            emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: item.text });
+          }
         } else if (itemType === 'reasoning' && typeof item.text === 'string') {
           emit({ type: 'assistant_note', sessionId, agent: activeAgent, text: item.text.slice(0, 260) });
         } else if (
@@ -764,16 +1171,19 @@ async function runCodexCli(params: {
   const text = agentMessages.join('\n\n').trim();
   if (!text && (res.exitCode !== 0 || lastErrorText)) {
     const errMsg = lastErrorText || res.rawStderr || 'Codex execution failed.';
-    if (/sign in|login|auth|unauthorized|not logged in/i.test(errMsg)) {
-      return {
-        text: errMsg,
-        toolTraces,
+    const kind = classifyCliError(errMsg);
+    if (kind === 'signed_out' || kind === 'quota_exceeded') {
+      return buildSlotAttention({
+        reason: kind,
+        agent: activeAgent,
+        provider: 'codex',
+        slotId: slotConfig.id,
+        slotLabel: slotConfig.label,
+        cliEngine: 'codex',
         modelUsed: model,
-        needsAttention: {
-          message: errMsg.slice(0, 320),
-          action: { type: 'login', provider: 'codex', label: 'Sign in with ChatGPT' },
-        },
-      };
+        message: `Codex ${slotConfig.label} (${model}): ${errMsg.slice(0, 320)}`,
+        toolTraces,
+      });
     }
     throw new Error(errMsg.slice(0, 500));
   }
@@ -789,25 +1199,66 @@ async function runCodexCli(params: {
     };
   }
 
-  await recordCliAudit(sessionId, activeAgent, `codex:${model}`, Date.now() - startedAt, text, emit);
+  await recordCliAudit(
+    sessionId,
+    activeAgent,
+    `codex[${slotConfig.id}]:${model}`,
+    `${slotConfig.label} (Codex CLI) · ${planningOnly ? 'plan' : settings.safetyMode}`,
+    Date.now() - startedAt,
+    text,
+    emit,
+  );
 
-  return { text: text || 'Done.', toolTraces, usage, modelUsed: model };
+  return {
+    text: text || 'Done.',
+    toolTraces,
+    usage,
+    provider: 'codex',
+    slotId: slotConfig.id,
+    slotLabel: slotConfig.label,
+    cliEngine: 'codex',
+    modelUsed: model,
+  };
 }
+
+// ---------------------------------------------------------------------------
+// 4. Official Claude Code CLI (`claude.exe` v2.1.329) — Per-Slot CLAUDE_CONFIG_DIR
+// ---------------------------------------------------------------------------
 
 async function runClaudeCli(params: {
   binary: string;
   workspace: string;
   fullPrompt: string;
   model: string;
+  slotConfig: AccountSlotConfig;
+  env: NodeJS.ProcessEnv;
   settings: AppSettings;
+  planningOnly: boolean;
+  streamToChat: boolean;
   sessionId: string;
   activeAgent: AgentId;
   toolTraces: ToolCallTrace[];
   emit: (event: ServerWsEvent) => void;
   signal: AbortSignal;
 }): Promise<CliRunOutput> {
-  const { binary, workspace, fullPrompt, model, settings, sessionId, activeAgent, toolTraces, emit, signal } = params;
+  const {
+    binary,
+    workspace,
+    fullPrompt,
+    model,
+    slotConfig,
+    env,
+    settings,
+    planningOnly,
+    streamToChat,
+    sessionId,
+    activeAgent,
+    toolTraces,
+    emit,
+    signal,
+  } = params;
 
+  // Verified claude --help flags: -p, --output-format stream-json, --verbose, --model, --effort, --permission-mode, --permission-prompts, --dangerously-skip-permissions
   const args: string[] = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (model && model !== 'default') {
     args.push('--model', model);
@@ -816,12 +1267,14 @@ async function runClaudeCli(params: {
     args.push('--effort', settings.effort);
   }
 
-  if (settings.safetyMode === 'read_only') {
+  if (planningOnly || settings.safetyMode === 'read_only') {
     args.push('--permission-mode', 'plan');
+  } else if (settings.safetyMode === 'safe') {
+    args.push('--permission-mode', 'manual', '--permission-prompts', 'none');
   } else if (settings.safetyMode === 'full_auto') {
     args.push('--dangerously-skip-permissions');
   } else {
-    args.push('--permission-mode', 'acceptEdits');
+    args.push('--permission-mode', 'acceptEdits', '--permission-prompts', 'none');
   }
 
   const startedAt = Date.now();
@@ -832,6 +1285,7 @@ async function runClaudeCli(params: {
     binary,
     args,
     cwd: workspace,
+    env,
     stdinText: fullPrompt,
     signal,
     onJsonEvent: (ev) => {
@@ -841,7 +1295,9 @@ async function runClaudeCli(params: {
         for (const block of msg.content || []) {
           if (block.type === 'text' && typeof block.text === 'string') {
             finalText = block.text;
-            emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: block.text });
+            if (streamToChat) {
+              emit({ type: 'stream_delta', sessionId, agent: activeAgent, delta: block.text });
+            }
           } else if (block.type === 'tool_use') {
             const trace: ToolCallTrace = {
               id: String(block.id || randomUUID()),
@@ -880,16 +1336,19 @@ async function runClaudeCli(params: {
 
   if (res.exitCode !== 0 && !finalText.trim()) {
     const errMsg = (res.rawStderr || res.rawStdout || 'Claude Code execution failed.').trim();
-    if (/login|auth|not logged in|sign in/i.test(errMsg)) {
-      return {
-        text: errMsg,
-        toolTraces,
+    const kind = classifyCliError(errMsg);
+    if (kind === 'signed_out' || kind === 'quota_exceeded') {
+      return buildSlotAttention({
+        reason: kind,
+        agent: activeAgent,
+        provider: 'claude',
+        slotId: slotConfig.id,
+        slotLabel: slotConfig.label,
+        cliEngine: 'claude',
         modelUsed: model,
-        needsAttention: {
-          message: errMsg.slice(0, 320),
-          action: { type: 'login', provider: 'claude', label: 'Sign in with Claude' },
-        },
-      };
+        message: `Claude Code ${slotConfig.label} (${model}): ${errMsg.slice(0, 320)}`,
+        toolTraces,
+      });
     }
     throw new Error(errMsg.slice(0, 500));
   }
@@ -905,15 +1364,33 @@ async function runClaudeCli(params: {
     };
   }
 
-  await recordCliAudit(sessionId, activeAgent, `claude:${model}`, Date.now() - startedAt, finalText, emit);
+  await recordCliAudit(
+    sessionId,
+    activeAgent,
+    `claude[${slotConfig.id}]:${model}`,
+    `${slotConfig.label} (Claude CLI) · ${planningOnly ? 'plan' : settings.safetyMode}`,
+    Date.now() - startedAt,
+    finalText,
+    emit,
+  );
 
-  return { text: finalText.trim() || 'Done.', toolTraces, usage, modelUsed: model };
+  return {
+    text: finalText.trim() || 'Done.',
+    toolTraces,
+    usage,
+    provider: 'claude',
+    slotId: slotConfig.id,
+    slotLabel: slotConfig.label,
+    cliEngine: 'claude',
+    modelUsed: model,
+  };
 }
 
 async function recordCliAudit(
   sessionId: string,
   agent: AgentId,
   toolName: string,
+  argsPreview: string,
   durationMs: number,
   summary: string,
   emit: (event: ServerWsEvent) => void,
@@ -926,7 +1403,7 @@ async function recordCliAudit(
     toolName,
     risk: 'read',
     decision: 'auto_allowed',
-    argsPreview: 'CLI account turn',
+    argsPreview,
     status: 'completed',
     durationMs,
     summary: summary.slice(0, 140),
@@ -939,6 +1416,7 @@ function spawnJsonStream(params: {
   binary: string;
   args: string[];
   cwd: string;
+  env: NodeJS.ProcessEnv;
   stdinText: string;
   signal: AbortSignal;
   onJsonEvent: (obj: Record<string, unknown>) => void;
@@ -957,7 +1435,7 @@ function spawnJsonStream(params: {
         cwd: params.cwd,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: params.env,
       },
     );
 

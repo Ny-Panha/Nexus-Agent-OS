@@ -8,7 +8,7 @@ interface NeedsAttentionCardProps {
   language: UiLanguage;
   message: string;
   action?: NeedsAttentionAction;
-  onTriggerLogin: (provider: ProviderType) => Promise<void>;
+  onTriggerLogin: (provider: ProviderType, slotId?: string) => Promise<void>;
   onRefreshProviders: () => Promise<void>;
   onOpenAccountsSettings: () => void;
 }
@@ -37,11 +37,11 @@ export function NeedsAttentionCard({
     setBusy(true);
     setStatusNote(null);
     try {
-      await onTriggerLogin(action.provider);
+      await onTriggerLogin(action.provider, action.slotId);
       setStatusNote(
         action.provider === 'ollama'
           ? 'Local AI started. You can send your message again.'
-          : 'Official sign-in window opened. Complete sign-in in your browser, then click Refresh status.',
+          : `Official sign-in window opened${action.slotLabel ? ` for ${action.slotLabel}` : ''}. Complete sign-in in your browser, then click Refresh status.`,
       );
     } finally {
       setBusy(false);
@@ -50,7 +50,19 @@ export function NeedsAttentionCard({
 
   return (
     <div className="rounded-xl border border-rose-500/45 bg-rose-950/15 p-4 space-y-3">
-      <div className="text-xs font-semibold text-rose-200">{copy.needsAttention}</div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-rose-200">
+            {action?.reason === 'quota_exceeded' ? 'Quota / Limit Reached' : copy.needsAttention}
+          </span>
+          {action?.agent && <AgentPill agent={action.agent} compact />}
+        </div>
+        {action?.slotLabel && (
+          <span className="text-[11px] font-mono text-rose-200/80 px-2 py-0.5 rounded bg-black/30 border border-rose-500/25">
+            {action.slotLabel}
+          </span>
+        )}
+      </div>
       <p className="text-[13px] leading-relaxed text-[var(--text-secondary)]">{message}</p>
 
       {statusNote && (

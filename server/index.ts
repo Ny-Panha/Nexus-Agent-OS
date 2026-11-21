@@ -8,6 +8,7 @@ import { z } from 'zod';
 import {
   AGENT_ROSTER,
   type ChatMessage,
+  type CliAccountProvider,
   type ProviderType,
   type ServerWsEvent,
   type TargetMode,
@@ -33,12 +34,21 @@ import { MultiAgentRunner } from './agents/orchestrator.js';
 import { captureDesktopScreenshot, collectSystemTelemetry } from './tools/systemTools.js';
 import { listOllamaModels, testProviderConnection } from './llm/client.js';
 import {
+  activateAccountSlot,
+  createAccountSlot,
   getAllProviderStatuses,
   invalidateProviderCache,
+  removeAccountSlot,
   triggerProviderLogin,
   triggerProviderLogout,
+  triggerSlotLogin,
+  triggerSlotLogout,
 } from './llm/providerRegistry.js';
-import { disposeAllWarmWorkers, disposeWarmWorkersForSession } from './llm/cliRunner.js';
+import {
+  disposeAllWarmWorkers,
+  disposeWarmWorkersForSession,
+  disposeWarmWorkersForSlot,
+} from './llm/cliRunner.js';
 
 const PORT = Number(process.env.NEXUS_PORT || 4310);
 const SERVE_STATIC = process.env.NEXUS_SERVE_STATIC === '1';
@@ -117,11 +127,15 @@ app.post('/api/providers/:id/login', async (req, res) => {
     res.status(400).json({ ok: false, message: 'Unsupported provider for CLI login.' });
     return;
   }
+  const slotId = typeof req.body?.slotId === 'string' && req.body.slotId.trim() ? req.body.slotId.trim() : undefined;
   const settings = await loadSettings();
-  const result = await triggerProviderLogin(parsed.data as ProviderType, settings);
+  const result =
+    slotId && parsed.data !== 'ollama'
+      ? await triggerSlotLogin(parsed.data as CliAccountProvider, slotId, settings)
+      : await triggerProviderLogin(parsed.data as ProviderType, settings);
   const refreshedSettings = await loadSettings();
   const providers = await getAllProviderStatuses(refreshedSettings, true);
-  res.json({ ...result, providers });
+  res.json({ ...result, settings: refreshedSettings, providers });
 });
 
 app.post('/api/providers/:id/logout', async (req, res) => {
@@ -131,14 +145,91 @@ app.post('/api/providers/:id/logout', async (req, res) => {
     res.status(400).json({ ok: false, message: 'Unsupported provider for logout.' });
     return;
   }
+  const slotId = typeof req.body?.slotId === 'string' && req.body.slotId.trim() ? req.body.slotId.trim() : undefined;
   if (parsed.data === 'gemini_agy') {
-    disposeAllWarmWorkers();
+    if (slotId) disposeWarmWorkersForSlot(slotId);
+    else disposeAllWarmWorkers();
   }
   const settings = await loadSettings();
-  const result = await triggerProviderLogout(parsed.data as ProviderType, settings);
+  const result =
+    slotId && parsed.data !== 'ollama'
+      ? await triggerSlotLogout(parsed.data as CliAccountProvider, slotId, settings)
+      : await triggerProviderLogout(parsed.data as ProviderType, settings);
   const refreshedSettings = await loadSettings();
   const providers = await getAllProviderStatuses(refreshedSettings, true);
-  res.json({ ...result, providers });
+  res.json({ ...result, settings: refreshedSettings, providers });
+});
+
+// Multi-Slot Account Management (Codex / Gemini / Claude)
+app.post('/api/providers/:id/slots', async (req, res) => {
+  const cliProvSchema = z.enum(['gemini_agy', 'codex', 'claude']);
+  const parsed = cliProvSchema.safeParse(req.params.id);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Multi-slot accounts are supported for Codex, Gemini, and Claude.' });
+    return;
+  }
+  const label = typeof req.body?.label === 'string' ? req.body.label.slice(0, 60) : undefined;
+  const settings = await loadSettings();
+  const created = await createAccountSlot(parsed.data, settings, label);
+  const providers = await getAllProviderStatuses(created.settings, true);
+  res.json({ ...created, providers });
+});
+
+app.delete('/api/providers/:id/slots/:slotId', async (req, res) => {
+  const cliProvSchema = z.enum(['gemini_agy', 'codex', 'claude']);
+  const parsed = cliProvSchema.safeParse(req.params.id);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Unsupported provider for slot removal.' });
+    return;
+  }
+  const slotId = req.params.slotId;
+  disposeWarmWorkersForSlot(slotId);
+  const settings = await loadSettings();
+  const removed = await removeAccountSlot(parsed.data, slotId, settings);
+  const providers = await getAllProviderStatuses(removed.settings, true);
+  res.status(removed.ok ? 200 : 400).json({ ...removed, providers });
+});
+
+app.post('/api/providers/:id/slots/:slotId/login', async (req, res) => {
+  const cliProvSchema = z.enum(['gemini_agy', 'codex', 'claude']);
+  const parsed = cliProvSchema.safeParse(req.params.id);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Unsupported provider for slot login.' });
+    return;
+  }
+  const settings = await loadSettings();
+  const result = await triggerSlotLogin(parsed.data, req.params.slotId, settings);
+  const refreshedSettings = await loadSettings();
+  const providers = await getAllProviderStatuses(refreshedSettings, true);
+  res.json({ ...result, settings: refreshedSettings, providers });
+});
+
+app.post('/api/providers/:id/slots/:slotId/logout', async (req, res) => {
+  const cliProvSchema = z.enum(['gemini_agy', 'codex', 'claude']);
+  const parsed = cliProvSchema.safeParse(req.params.id);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Unsupported provider for slot logout.' });
+    return;
+  }
+  disposeWarmWorkersForSlot(req.params.slotId);
+  const settings = await loadSettings();
+  const result = await triggerSlotLogout(parsed.data, req.params.slotId, settings);
+  const refreshedSettings = await loadSettings();
+  const providers = await getAllProviderStatuses(refreshedSettings, true);
+  res.json({ ...result, settings: refreshedSettings, providers });
+});
+
+app.post('/api/providers/:id/slots/:slotId/activate', async (req, res) => {
+  const cliProvSchema = z.enum(['gemini_agy', 'codex', 'claude']);
+  const parsed = cliProvSchema.safeParse(req.params.id);
+  if (!parsed.success) {
+    res.status(400).json({ ok: false, message: 'Unsupported provider for slot activation.' });
+    return;
+  }
+  const settings = await loadSettings();
+  const result = await activateAccountSlot(parsed.data, req.params.slotId, settings);
+  const providers = await getAllProviderStatuses(result.settings, true);
+  res.status(result.ok ? 200 : 400).json({ ...result, providers });
 });
 
 app.post('/api/providers/refresh', async (_req, res) => {
@@ -156,12 +247,31 @@ app.get('/api/settings', async (_req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
+    const providerEnum = z.enum(['gemini_agy', 'codex', 'claude', 'ollama', 'gemini_api', 'openai_compatible']);
+    const routeSchema = z.object({
+      provider: providerEnum,
+      slotId: z.string().max(40).optional(),
+      model: z.string().max(120),
+    });
     const schema = z.object({
-      provider: z
-        .enum(['gemini_agy', 'codex', 'claude', 'ollama', 'gemini_api', 'openai_compatible'])
-        .optional(),
+      provider: providerEnum.optional(),
       effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
       selectedModels: z.record(z.string()).optional(),
+      activeSlots: z
+        .object({
+          codex: z.string().optional(),
+          gemini_agy: z.string().optional(),
+          claude: z.string().optional(),
+        })
+        .optional(),
+      agentRoutes: z
+        .object({
+          orchestrator: routeSchema,
+          file: routeSchema,
+          system: routeSchema,
+          browser: routeSchema,
+        })
+        .optional(),
       userName: z.string().max(60).optional(),
       language: z.enum(['en', 'km']).optional(),
       theme: z

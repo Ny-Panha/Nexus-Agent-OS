@@ -1,18 +1,46 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T03:29:40+07:00
+- **Last Session**: IDE — 2026-11-22T04:22:00+07:00
+- **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
-  - **Optimized Desktop Start Command (`npm run start:desktop`)**:
-    - Previously, `start:desktop` ran `npm run build && electron .`, forcing a full ~25-second Vite compilation bundle on every launch, which looked like it froze.
-    - Updated `package.json`:
-      - `npm run start:desktop` -> `electron .` (launches instantly in < 1 second using existing pre-built assets).
-      - `npm run build:desktop` -> `npm run build && electron .` (rebuilds and launches if needed).
-    - Double-clicking `start-nexus-app.bat` also runs `npx electron .` instantly.
-  - **Git Status**:
-    - Pushed commit `e7f7835` to `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
+  - **Implemented Per-Agent Accounts + Per-Agent Models on CLI Engines** (minimal extension preserving existing UI, Codex Slot 1, Gemini Antigravity Slot 1, Ollama, Gemini API, and OpenAI-compatible fallbacks):
+    - **Multi-Slot Accounts per Provider (`shared/types.ts`, `server/store/storage.ts`, `server/llm/providerRegistry.ts`, `server/index.ts`, `src/lib/api.ts`, `src/components/SettingsModal.tsx`)**:
+      - Preserved existing `Codex` (`~/.codex`) and `Gemini` (`agy.exe` Antigravity) logins as `slot-1` (`Account 1 (Default)`).
+      - Added `+ Add account` per CLI provider (`Codex`, `Gemini`, `Claude Code`), giving Slot 2+ isolated config homes under `data/cli-homes/<provider>/<slotId>` (gitignored in `.gitignore`).
+      - Official CLI config-home isolation env vars (zero token extraction/reading/injection):
+        - Codex Slot 2+: `CODEX_HOME=data/cli-homes/codex/<slotId>`
+        - Claude Code Slot 2+: `CLAUDE_CONFIG_DIR=data/cli-homes/claude/<slotId>`
+        - Gemini Slot 1: preserved Antigravity CLI (`agy.exe`, since live audit proved `agy.exe` ignores `USERPROFILE`/`HOME`/`APPDATA` overrides and binds to the single host daemon).
+        - Gemini Slot 2+: official Google Gemini CLI (`@google/gemini-cli` v0.68.0) with `GEMINI_CLI_HOME=data/cli-homes/gemini_agy/<slotId>` + `GEMINI_FORCE_FILE_STORAGE=true`.
+      - Non-destructive slot removal (`DELETE /api/providers/:id/slots/:slotId`): removes slot config only and preserves `data/cli-homes/` folder on disk.
+      - Gemini CLI slot logout: verified `gemini` v0.68.0 has no `logout` subcommand (`gemini logout --help` prints root usage); never reads `oauth_creds.json`; unlinks credential/account files strictly inside `data/cli-homes/gemini_agy/<slotId>/.gemini/` as the logout action itself.
+    - **Per-Agent Routing (`Settings → Agents`, `server/agents/orchestrator.ts`, `server/llm/cliRunner.ts`)**:
+      - Each agent (`Orchestrator`, `File`, `System`, `Browser`) selects `Provider → Account Slot → Model`, including fallback engines (`Ollama`, `Gemini API Key`, `OpenAI-Compatible`) in the same dropdowns.
+      - Defaults: `Orchestrator → Codex Slot 1` (strongest model), `File / System / Browser → Gemini Slot 1` (Flash model).
+      - Unified heterogeneous multi-agent orchestration: CLI Orchestrators delegate to specialists running on different providers/slots/models via `nexus_delegate` protocol, with safe fallback (if missing or invalid JSON, output is treated as a direct reply — never fails the mission).
+    - **Per-Agent Error Isolation (`cliRunner.ts`, `orchestrator.ts`, `ChatPanel.tsx`, `NeedsAttentionCard.tsx`)**:
+      - Quota/rate-limit or signed-out errors on one slot surface ONLY on that agent with a direct 1-click sign-in shortcut to that exact slot, while other agents on other slots continue working.
+    - **Verified CLI Safety Mode Flags (all verified via `--help` on this machine)**:
+      - **Codex (`codex exec`)**: `read_only` → `-s read-only`; `safe` → `-s read-only` (non-interactive `codex exec` cannot prompt mid-turn — labeled honestly in UI); `smart` → `-s workspace-write`; `full_auto` → `--dangerously-bypass-approvals-and-sandbox`.
+      - **Antigravity (`agy.exe`)**: `read_only` → `--mode plan`; `safe` → `--mode plan --sandbox` (headless `stream-json` cannot prompt mid-turn — labeled honestly); `smart` → `--mode accept-edits --sandbox`; `full_auto` → `--dangerously-skip-permissions`.
+      - **Gemini CLI (`gemini` v0.68.0)**: `read_only` → `--approval-mode plan`; `safe` → `--approval-mode plan -s` (headless `-p` cannot prompt mid-turn — labeled honestly); `smart` → `--approval-mode auto_edit`; `full_auto` → `--approval-mode yolo`.
+      - **Claude Code (`claude.exe` v2.1.329)**: `read_only` → `--permission-mode plan`; `safe` → `--permission-mode manual --permission-prompts none` (auto-denies unapproved tools — labeled honestly); `smart` → `--permission-mode acceptEdits --permission-prompts none`; `full_auto` → `--dangerously-skip-permissions`.
+      - **Ollama / API Key**: Full interactive `PermissionGate` approval support for all 4 modes.
+  - **Verification Results**:
+    - `npm run typecheck && npm run build`: **PASS** (0 errors).
+    - Multi-slot API & non-destructive removal: **PASS** (Gemini Slot 1 preserved, Gemini Slot 2 created under `data/cli-homes/gemini_agy/slot-2`; temp Codex Slot 2 removed from config with folder preserved on disk).
+    - Live Mission 1 (Error Isolation: Orchestrator `codex/slot-1` → File Agent `gemini_agy/slot-2` unsigned): **PASS** (`handoffs[0].status=error`, isolated `agentErrors` with 1-click `Sign in to Gemini (Account 2 (Gemini CLI))` CTA, Orchestrator stayed healthy).
+    - Live Mission 2 (Cross-Account Delegation: Orchestrator `codex/slot-1/gpt-6.2-astra` → File Agent `gemini_agy/slot-1/gemini-3.8-flash-medium`): **PASS** (`nexus-agent-os@1.0.0` returned; audit log confirmed `[orchestrator] codex[slot-1]:gpt-6.2-astra` + `[file] agy[slot-1]:gemini-3.8-flash-medium`).
+    - Live Mission 3 (Direct Reply Fallback): **PASS** (`Hello Nha!` returned directly with zero parse errors).
+    - Restart Persistence: **PASS** (server killed & restarted; Gemini Slot 1 + Slot 2, Codex Slot 1, and `agentRoutes` all persisted cleanly).
+    - Browser Visual Check: **BLOCKED** (Chrome remote debugging not enabled on host).
 - **Active Environment**:
   - Project Path: `c:\Users\nhastar\Desktop\nexus-agent-os`
-  - GitHub Remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`
-  - Local Agent Server: `http://127.0.0.1:4310` (WebSocket: `ws://127.0.0.1:4310/ws`)
-  - Vite Dev UI: `http://127.0.0.1:5178`
-  - Launch Commands: `npm run start:desktop` or double-click `start-nexus-app.bat`
+  - Git Branch: `feat/per-agent-accounts` (remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`)
+  - Local Agent Server: `http://127.0.0.1:4310` (stopped cleanly so ports are free)
+  - Vite Dev UI: `http://127.0.0.1:5178` (stopped cleanly so ports are free)
+  - Launch Command for live verification: `npm run dev`
+- **Next Steps**:
+  - Run `npm run dev`, open **Settings → AI accounts → Gemini → Account 2 (Gemini CLI)**, and click **Sign in** to complete official browser Google OAuth with a 2nd Google account (since Nexus never automates or touches Google credentials).
+  - Click **Refresh** in Settings → AI accounts, confirm `Account 2` shows Active with the 2nd Google email, then run a File Agent task in Chat to see Orchestrator (`Codex Slot 1`) → File Agent (`Gemini Slot 2`) live under two separate accounts.
+  - Review `feat/per-agent-accounts` on GitHub before merging to `main`.

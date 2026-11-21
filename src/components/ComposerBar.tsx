@@ -14,15 +14,18 @@ import {
   Zap,
   RotateCcw,
 } from 'lucide-react';
-import type {
-  AppSettings,
-  ChatMessage,
-  EffortLevel,
-  ProviderAccountStatus,
-  ProviderType,
-  SafetyMode,
-  TargetMode,
-  WorkflowPreset,
+import {
+  CLI_SAFETY_SUPPORT,
+  type AgentId,
+  type AppSettings,
+  type ChatMessage,
+  type CliEngineKind,
+  type EffortLevel,
+  type ProviderAccountStatus,
+  type ProviderType,
+  type SafetyMode,
+  type TargetMode,
+  type WorkflowPreset,
 } from '../../shared/types';
 import { t } from '../lib/i18n';
 import { ContextRingPopover } from './ContextRingPopover';
@@ -39,7 +42,8 @@ const EFFORT_OPTIONS: Array<{ id: EffortLevel; label: string; desc: string }> = 
 
 const PERMISSION_OPTIONS: Array<{ id: SafetyMode; label: string; desc: string }> = [
   { id: 'full_auto', label: 'Dangerous', desc: 'Runs tools without asking' },
-  { id: 'smart', label: 'Workspace', desc: 'Asks you for risky tools, in the chat' },
+  { id: 'smart', label: 'Smart (Workspace)', desc: 'Workspace edits allowed; guards risky shell actions' },
+  { id: 'safe', label: 'Safe', desc: 'Strict safety: asks on API/Ollama; sandbox/plan on headless CLIs' },
   { id: 'read_only', label: 'Read only', desc: 'Plans only, runs nothing' },
 ];
 
@@ -58,7 +62,7 @@ interface ComposerBarProps {
   onSelectPermission: (mode: SafetyMode) => void;
   onSelectTarget: (target: TargetMode) => void;
   onRunPreset: (preset: WorkflowPreset) => void;
-  onTriggerLogin: (provider: ProviderType) => void;
+  onTriggerLogin: (provider: ProviderType, slotId?: string) => void;
   onQuickScreenshot: () => void;
   onOpenCommandPalette: () => void;
 }
@@ -104,24 +108,45 @@ export function ComposerBar({
     };
   }, [popover]);
 
-  const activeProvider = providers.find((p) => p.id === settings.provider) || providers[0];
+  const activeAgentId: AgentId = targetMode === 'auto' ? 'orchestrator' : targetMode;
+  const activeRoute = settings.agentRoutes?.[activeAgentId];
+  const effectiveProviderId: ProviderType = activeRoute?.provider || settings.provider;
+  const activeProvider = providers.find((p) => p.id === effectiveProviderId) || providers[0];
+  const activeSlot = activeProvider?.slots?.find(
+    (s) => s.id === (activeRoute?.slotId || activeProvider.activeSlotId || 'slot-1'),
+  ) || activeProvider?.slots?.[0];
+  const activeModels = activeSlot ? activeSlot.models : activeProvider?.models || [];
+  const activeSignedIn = activeSlot ? activeSlot.signedIn : Boolean(activeProvider?.signedIn);
+  const activeEngine: CliEngineKind | 'native' =
+    activeSlot?.cliEngine ||
+    (effectiveProviderId === 'codex'
+      ? 'codex'
+      : effectiveProviderId === 'claude'
+        ? 'claude'
+        : effectiveProviderId === 'gemini_agy'
+          ? 'agy'
+          : 'native');
+
   const rawModelId =
-    settings.selectedModels?.[settings.provider] || activeProvider?.defaultModel || '';
+    activeRoute?.model ||
+    settings.selectedModels?.[effectiveProviderId] ||
+    activeSlot?.defaultModel ||
+    activeProvider?.defaultModel ||
+    '';
   const strippedModelId = rawModelId.replace(/-(low|medium|high|xhigh|max)$/i, '');
   const currentModelOption =
-    activeProvider?.models.find((m) => m.id === rawModelId) ||
-    activeProvider?.models.find((m) => m.id === strippedModelId);
+    activeModels.find((m) => m.id === rawModelId) ||
+    activeModels.find((m) => m.id === strippedModelId);
   const currentModelId = currentModelOption?.id || rawModelId;
   const currentModelLabel =
     currentModelOption?.label ||
     (currentModelId && currentModelId !== 'default' ? currentModelId : 'Choose...');
 
-  const currentEffort = EFFORT_OPTIONS.find((e) => e.id === settings.effort) || EFFORT_OPTIONS[1];
   const currentPermission =
     PERMISSION_OPTIONS.find((p) => p.id === settings.safetyMode) || PERMISSION_OPTIONS[1];
 
   // Discrete Effort Slider stops matching Rex Desk real widget
-  const isAgy = settings.provider === 'gemini_agy';
+  const isAgy = activeEngine === 'agy';
   const topStopLabel = isAgy ? 'Max' : 'Extra High';
   const topStopId: EffortLevel = isAgy ? 'max' : 'xhigh';
 
@@ -210,7 +235,7 @@ export function ComposerBar({
     onSend(trimmed);
   };
 
-  const filteredModels = (activeProvider?.models || []).filter(
+  const filteredModels = activeModels.filter(
     (m) =>
       !modelFilter.trim() ||
       m.label.toLowerCase().includes(modelFilter.toLowerCase()) ||
@@ -385,10 +410,13 @@ export function ComposerBar({
               >
                 <span
                   className={`w-1.5 h-1.5 rounded-full ${
-                    activeProvider?.signedIn ? 'bg-emerald-400' : 'bg-rose-400'
+                    activeSignedIn ? 'bg-emerald-400' : 'bg-rose-400'
                   }`}
                 />
-                <span>{activeProvider?.shortName || 'Gemini'}</span>
+                <span>
+                  {activeProvider?.shortName || effectiveProviderId}
+                  {activeSlot && activeSlot.id !== 'slot-1' ? ` · ${activeSlot.id.replace('slot-', '#')}` : ''}
+                </span>
                 <ChevronDown className="w-3 h-3 text-[var(--text-muted)]" />
               </button>
 
@@ -401,7 +429,8 @@ export function ComposerBar({
                   }}
                 >
                   {providers.map((p) => {
-                    const selected = p.id === settings.provider;
+                    const selected = p.id === effectiveProviderId;
+                    const signedSlots = p.slots ? p.slots.filter((s) => s.signedIn).length : p.signedIn ? 1 : 0;
                     return (
                       <button
                         key={p.id}
@@ -424,9 +453,14 @@ export function ComposerBar({
                             </span>
                             <span
                               className={`w-1.5 h-1.5 rounded-full ${
-                                p.signedIn ? 'bg-emerald-400' : 'bg-rose-400'
+                                signedSlots > 0 ? 'bg-emerald-400' : 'bg-rose-400'
                               }`}
                             />
+                            {p.slots && p.slots.length > 1 && (
+                              <span className="text-[10px] font-mono text-[var(--text-muted)]">
+                                {signedSlots}/{p.slots.length} slots
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">
                             {p.subtitle}
@@ -442,7 +476,7 @@ export function ComposerBar({
               )}
             </div>
 
-            {/* 2. Model Picker (Dynamic per Signed-in Account) */}
+            {/* 2. Model Picker (Dynamic per Signed-in Account Slot) */}
             <div className="relative">
               <button
                 type="button"
@@ -468,32 +502,32 @@ export function ComposerBar({
                     borderColor: 'var(--border-strong)',
                   }}
                 >
-                  {!activeProvider?.signedIn ? (
+                  {!activeSignedIn ? (
                     <div className="p-2.5 space-y-2.5">
                       <div className="text-xs font-medium text-[var(--text-primary)]">
-                        {activeProvider?.name} is not signed in
+                        {activeProvider?.name} {activeSlot ? `(${activeSlot.label})` : ''} is not signed in
                       </div>
                       <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                        Sign in with your account to automatically load available models.
+                        Sign in to this account slot to load available models.
                       </p>
                       {activeProvider && (
                         <button
                           type="button"
                           onClick={() => {
-                            onTriggerLogin(activeProvider.id);
+                            onTriggerLogin(activeProvider.id, activeSlot?.id);
                             setPopover(null);
                           }}
                           className="w-full h-8 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 cursor-pointer"
                           style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-fg)' }}
                         >
                           <LogIn className="w-3.5 h-3.5" />
-                          <span>{activeProvider.loginActionLabel || 'Sign in'}</span>
+                          <span>{activeSlot?.loginActionLabel || activeProvider.loginActionLabel || 'Sign in'}</span>
                         </button>
                       )}
                     </div>
                   ) : (
                     <>
-                      {activeProvider.models.length > 6 && (
+                      {activeModels.length > 6 && (
                         <input
                           type="text"
                           value={modelFilter}
@@ -690,16 +724,15 @@ export function ComposerBar({
 
               {popover === 'permission' && (
                 <div
-                  className="absolute right-0 bottom-full mb-2 w-[265px] rounded-2xl border shadow-2xl p-1.5 z-40 space-y-0.5"
+                  className="absolute right-0 bottom-full mb-2 w-[300px] rounded-2xl border shadow-2xl p-1.5 z-40 space-y-0.5"
                   style={{
                     backgroundColor: 'var(--bg-elevated)',
                     borderColor: 'var(--border-strong)',
                   }}
                 >
                   {PERMISSION_OPTIONS.map((opt) => {
-                    const selected =
-                      opt.id === settings.safetyMode ||
-                      (opt.id === 'smart' && settings.safetyMode === 'safe');
+                    const selected = opt.id === settings.safetyMode;
+                    const enforcement = CLI_SAFETY_SUPPORT[activeEngine][opt.id];
                     return (
                       <button
                         key={opt.id}
@@ -708,18 +741,30 @@ export function ComposerBar({
                           onSelectPermission(opt.id);
                           setPopover(null);
                         }}
-                        className={`w-full px-3 py-2.5 rounded-xl text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                        className={`w-full px-3 py-2 rounded-xl text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
                           selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'
                         }`}
                       >
-                        <div>
-                          <div
-                            className="text-xs font-semibold"
-                            style={{ color: selected ? 'var(--accent)' : 'var(--text-primary)' }}
-                          >
-                            {opt.label}
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="text-xs font-semibold"
+                              style={{ color: selected ? 'var(--accent)' : 'var(--text-primary)' }}
+                            >
+                              {opt.label}
+                            </span>
+                            {enforcement.enforced !== 'full' && (
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                                CLI sandbox
+                              </span>
+                            )}
                           </div>
-                          <div className="text-[11px] text-[var(--text-muted)]">{opt.desc}</div>
+                          <div className="text-[11px] text-[var(--text-muted)] leading-snug mt-0.5">
+                            {enforcement.note}
+                          </div>
+                          <div className="text-[10px] font-mono text-sky-300/80 truncate mt-0.5">
+                            {enforcement.flagSummary}
+                          </div>
                         </div>
                         {selected && (
                           <Check className="w-4 h-4 shrink-0" style={{ color: 'var(--accent)' }} />

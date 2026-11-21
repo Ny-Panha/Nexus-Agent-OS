@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-server/
 .nexus-data/
+data/cli-homes/
 ollama_models/
 .env
 .env.*.local

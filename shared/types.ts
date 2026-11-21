@@ -14,6 +14,166 @@ export type ProviderType =
   | 'gemini_api'
   | 'openai_compatible';
 
+export type CliAccountProvider = 'gemini_agy' | 'codex' | 'claude';
+
+export type CliEngineKind = 'agy' | 'gemini_cli' | 'codex' | 'claude';
+
+export interface AccountSlotConfig {
+  id: string;
+  label: string;
+  cliEngine: CliEngineKind;
+  /** Relative path under project root (e.g. data/cli-homes/codex/slot-2); omitted for Slot 1 OS default home */
+  homeDir?: string;
+  disconnected?: boolean;
+  createdAt: string;
+}
+
+export interface AccountSlotStatus {
+  id: string;
+  provider: CliAccountProvider;
+  label: string;
+  cliEngine: CliEngineKind;
+  homeDir?: string;
+  homeDirHint: string;
+  installed: boolean;
+  signedIn: boolean;
+  binaryPath?: string;
+  accountLabel?: string;
+  models: ModelOption[];
+  defaultModel: string;
+  error?: string;
+  canLogin: boolean;
+  loginActionLabel?: string;
+  canLogout: boolean;
+  logoutActionLabel?: string;
+  isDefault: boolean;
+}
+
+export interface AgentRouteConfig {
+  provider: ProviderType;
+  slotId?: string;
+  model: string;
+}
+
+export interface SafetyModeEnforcement {
+  enforced: 'full' | 'partial' | 'sandbox_fallback';
+  flagSummary: string;
+  note: string;
+}
+
+export const CLI_SAFETY_SUPPORT: Record<CliEngineKind | 'native', Record<SafetyMode, SafetyModeEnforcement>> = {
+  codex: {
+    read_only: {
+      enforced: 'full',
+      flagSummary: '-s read-only',
+      note: 'Enforced by Codex read-only sandbox.',
+    },
+    safe: {
+      enforced: 'sandbox_fallback',
+      flagSummary: '-s read-only',
+      note: 'codex exec is non-interactive and cannot prompt per tool; Safe enforces read-only sandbox.',
+    },
+    smart: {
+      enforced: 'full',
+      flagSummary: '-s workspace-write',
+      note: 'Confines writes to the workspace sandbox.',
+    },
+    full_auto: {
+      enforced: 'full',
+      flagSummary: '--dangerously-bypass-approvals-and-sandbox',
+      note: 'Runs tools without approvals or sandbox.',
+    },
+  },
+  agy: {
+    read_only: {
+      enforced: 'full',
+      flagSummary: '--mode plan',
+      note: 'Enforced by Antigravity plan mode.',
+    },
+    safe: {
+      enforced: 'sandbox_fallback',
+      flagSummary: '--mode plan --sandbox',
+      note: 'Headless agy stream-json cannot pause for interactive chat prompts; Safe enforces plan + sandbox.',
+    },
+    smart: {
+      enforced: 'full',
+      flagSummary: '--mode accept-edits --sandbox',
+      note: 'Allows workspace edits with terminal sandbox restrictions.',
+    },
+    full_auto: {
+      enforced: 'full',
+      flagSummary: '--dangerously-skip-permissions',
+      note: 'Auto-approves all tool calls without asking.',
+    },
+  },
+  gemini_cli: {
+    read_only: {
+      enforced: 'full',
+      flagSummary: '--approval-mode plan',
+      note: 'Enforced by Gemini CLI read-only plan mode.',
+    },
+    safe: {
+      enforced: 'sandbox_fallback',
+      flagSummary: '--approval-mode plan -s',
+      note: 'Headless gemini -p cannot prompt interactively; Safe enforces plan mode + sandbox.',
+    },
+    smart: {
+      enforced: 'full',
+      flagSummary: '--approval-mode auto_edit',
+      note: 'Auto-approves file edits; blocks unapproved shell actions.',
+    },
+    full_auto: {
+      enforced: 'full',
+      flagSummary: '--approval-mode yolo',
+      note: 'Auto-approves all tools without prompting.',
+    },
+  },
+  claude: {
+    read_only: {
+      enforced: 'full',
+      flagSummary: '--permission-mode plan',
+      note: 'Enforced by Claude Code plan mode.',
+    },
+    safe: {
+      enforced: 'partial',
+      flagSummary: '--permission-mode manual --permission-prompts none',
+      note: 'Headless claude -p cannot prompt interactively; unapproved tools are denied automatically.',
+    },
+    smart: {
+      enforced: 'full',
+      flagSummary: '--permission-mode acceptEdits --permission-prompts none',
+      note: 'Auto-approves workspace edits; denies unapproved shell commands.',
+    },
+    full_auto: {
+      enforced: 'full',
+      flagSummary: '--dangerously-skip-permissions',
+      note: 'Bypasses all permission checks.',
+    },
+  },
+  native: {
+    read_only: {
+      enforced: 'full',
+      flagSummary: 'Nexus PermissionGate (read-only)',
+      note: 'Blocks all write and danger tools.',
+    },
+    safe: {
+      enforced: 'full',
+      flagSummary: 'Nexus PermissionGate (ask every tool)',
+      note: 'Prompts inline in chat before every tool execution.',
+    },
+    smart: {
+      enforced: 'full',
+      flagSummary: 'Nexus PermissionGate (ask writes/danger)',
+      note: 'Auto-allows reads; prompts inline for writes and shell commands.',
+    },
+    full_auto: {
+      enforced: 'full',
+      flagSummary: 'Nexus PermissionGate (auto-allow)',
+      note: 'Runs all tools without asking.',
+    },
+  },
+};
+
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export type ThemeId =
@@ -111,6 +271,8 @@ export interface ProviderAccountStatus {
   loginActionLabel?: string;
   canLogout?: boolean;
   logoutActionLabel?: string;
+  slots?: AccountSlotStatus[];
+  activeSlotId?: string;
 }
 
 export interface TokenUsageStats {
@@ -125,8 +287,23 @@ export interface TokenUsageStats {
 export interface NeedsAttentionAction {
   type: 'login' | 'start_ollama' | 'open_settings' | 'install_cli';
   provider: ProviderType;
+  slotId?: string;
+  slotLabel?: string;
+  agent?: AgentId;
+  reason?: 'signed_out' | 'quota_exceeded' | 'cli_missing' | 'error';
   label: string;
   detail?: string;
+}
+
+export interface AgentSlotError {
+  agent: AgentId;
+  provider: ProviderType;
+  slotId?: string;
+  slotLabel?: string;
+  model?: string;
+  reason: 'signed_out' | 'quota_exceeded' | 'cli_missing' | 'error';
+  message: string;
+  action: NeedsAttentionAction;
 }
 
 export interface AppSettings {
@@ -134,6 +311,9 @@ export interface AppSettings {
   effort: EffortLevel;
   selectedModels: Partial<Record<ProviderType, string>>;
   disconnectedProviders?: ProviderType[];
+  accountSlots?: Partial<Record<CliAccountProvider, AccountSlotConfig[]>>;
+  activeSlots?: Partial<Record<CliAccountProvider, string>>;
+  agentRoutes?: Record<AgentId, AgentRouteConfig>;
   userName: string;
   language: UiLanguage;
   theme: ThemeId;
@@ -194,6 +374,11 @@ export interface AgentHandoff {
   task: string;
   status: 'running' | 'completed' | 'error';
   summary?: string;
+  provider?: ProviderType;
+  slotId?: string;
+  slotLabel?: string;
+  model?: string;
+  errorAction?: NeedsAttentionAction;
   startedAt: string;
   finishedAt?: string;
 }
@@ -215,6 +400,8 @@ export interface ChatMessage {
   kind?: 'message' | 'handoff_divider' | 'needs_attention';
   agent?: AgentId;
   provider?: ProviderType;
+  slotId?: string;
+  slotLabel?: string;
   model?: string;
   content: string;
   createdAt: string;
@@ -224,6 +411,7 @@ export interface ChatMessage {
   screenshots?: Array<{ label: string; dataUrl: string; filePath?: string }>;
   usage?: TokenUsageStats;
   actionCta?: NeedsAttentionAction;
+  agentErrors?: AgentSlotError[];
   error?: string;
 }
 

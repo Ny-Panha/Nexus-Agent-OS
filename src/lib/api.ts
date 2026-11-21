@@ -1,9 +1,11 @@
 import type {
+  AccountSlotConfig,
   AgentMeta,
   AppSettings,
   AuditLogEntry,
   ChatMessage,
   ChatSession,
+  CliAccountProvider,
   PendingApproval,
   ProviderAccountStatus,
   ProviderType,
@@ -32,16 +34,75 @@ export const api = {
   getAgents: () => request<{ agents: AgentMeta[] }>('/api/agents'),
   getProviderStatuses: (refresh = false) =>
     request<{ providers: ProviderAccountStatus[] }>(`/api/providers/status${refresh ? '?refresh=1' : ''}`),
-  loginProvider: (provider: ProviderType) =>
-    request<{ ok: boolean; message: string; openedTerminal?: boolean; providers: ProviderAccountStatus[] }>(
-      `/api/providers/${provider}/login`,
-      { method: 'POST' },
-    ),
-  logoutProvider: (provider: ProviderType) =>
-    request<{ ok: boolean; message: string; providers: ProviderAccountStatus[] }>(
-      `/api/providers/${provider}/logout`,
-      { method: 'POST' },
-    ),
+  loginProvider: (provider: ProviderType, slotId?: string) =>
+    request<{
+      ok: boolean;
+      message: string;
+      openedTerminal?: boolean;
+      settings?: AppSettings;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/login`, {
+      method: 'POST',
+      body: JSON.stringify(slotId ? { slotId } : {}),
+    }),
+  logoutProvider: (provider: ProviderType, slotId?: string) =>
+    request<{
+      ok: boolean;
+      message: string;
+      settings?: AppSettings;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/logout`, {
+      method: 'POST',
+      body: JSON.stringify(slotId ? { slotId } : {}),
+    }),
+  addProviderSlot: (provider: CliAccountProvider, label?: string) =>
+    request<{
+      ok: boolean;
+      slot: AccountSlotConfig;
+      settings: AppSettings;
+      message: string;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/slots`, {
+      method: 'POST',
+      body: JSON.stringify(label ? { label } : {}),
+    }),
+  removeProviderSlot: (provider: CliAccountProvider, slotId: string) =>
+    request<{
+      ok: boolean;
+      settings: AppSettings;
+      message: string;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/slots/${slotId}`, {
+      method: 'DELETE',
+    }),
+  loginProviderSlot: (provider: CliAccountProvider, slotId: string) =>
+    request<{
+      ok: boolean;
+      message: string;
+      openedTerminal?: boolean;
+      settings?: AppSettings;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/slots/${slotId}/login`, {
+      method: 'POST',
+    }),
+  logoutProviderSlot: (provider: CliAccountProvider, slotId: string) =>
+    request<{
+      ok: boolean;
+      message: string;
+      settings?: AppSettings;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/slots/${slotId}/logout`, {
+      method: 'POST',
+    }),
+  activateProviderSlot: (provider: CliAccountProvider, slotId: string) =>
+    request<{
+      ok: boolean;
+      settings: AppSettings;
+      message: string;
+      providers: ProviderAccountStatus[];
+    }>(`/api/providers/${provider}/slots/${slotId}/activate`, {
+      method: 'POST',
+    }),
   refreshProviders: () =>
     request<{ ok: boolean; providers: ProviderAccountStatus[] }>('/api/providers/refresh', {
       method: 'POST',

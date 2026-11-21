@@ -19,8 +19,11 @@ import {
 } from 'lucide-react';
 import {
   AGENT_ROSTER,
+  CLI_SAFETY_SUPPORT,
   type AgentId,
+  type AgentRouteConfig,
   type AppSettings,
+  type CliAccountProvider,
   type ProviderAccountStatus,
   type ProviderType,
   type StorageStats,
@@ -72,7 +75,7 @@ export function SettingsModal({
   const [form, setForm] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [loginBusy, setLoginBusy] = useState<ProviderType | null>(null);
+  const [loginBusy, setLoginBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
 
@@ -124,6 +127,10 @@ export function SettingsModal({
     try {
       const res = await api.loginProvider(providerId);
       onProvidersUpdated(res.providers);
+      if (res.settings) {
+        setForm(res.settings);
+        onSaved(res.settings);
+      }
       setNotice(res.message);
     } finally {
       setLoginBusy(null);
@@ -136,10 +143,176 @@ export function SettingsModal({
     try {
       const res = await api.logoutProvider(providerId);
       onProvidersUpdated(res.providers);
+      if (res.settings) {
+        setForm(res.settings);
+        onSaved(res.settings);
+      }
       setNotice(res.message);
     } finally {
       setLoginBusy(null);
     }
+  };
+
+  const handleAddSlot = async (providerId: CliAccountProvider) => {
+    setLoginBusy(`add:${providerId}`);
+    setNotice(null);
+    try {
+      const res = await api.addProviderSlot(providerId);
+      onProvidersUpdated(res.providers);
+      setForm(res.settings);
+      onSaved(res.settings);
+      setNotice(res.message);
+    } finally {
+      setLoginBusy(null);
+    }
+  };
+
+  const handleRemoveSlot = async (providerId: CliAccountProvider, slotId: string) => {
+    setLoginBusy(`rm:${providerId}:${slotId}`);
+    setNotice(null);
+    try {
+      const res = await api.removeProviderSlot(providerId, slotId);
+      onProvidersUpdated(res.providers);
+      setForm(res.settings);
+      onSaved(res.settings);
+      setNotice(res.message);
+    } finally {
+      setLoginBusy(null);
+    }
+  };
+
+  const handleSlotLogin = async (providerId: CliAccountProvider, slotId: string) => {
+    setLoginBusy(`login:${providerId}:${slotId}`);
+    setNotice(null);
+    try {
+      const res = await api.loginProviderSlot(providerId, slotId);
+      onProvidersUpdated(res.providers);
+      if (res.settings) {
+        setForm(res.settings);
+        onSaved(res.settings);
+      }
+      setNotice(res.message);
+    } finally {
+      setLoginBusy(null);
+    }
+  };
+
+  const handleSlotLogout = async (providerId: CliAccountProvider, slotId: string) => {
+    setLoginBusy(`logout:${providerId}:${slotId}`);
+    setNotice(null);
+    try {
+      const res = await api.logoutProviderSlot(providerId, slotId);
+      onProvidersUpdated(res.providers);
+      if (res.settings) {
+        setForm(res.settings);
+        onSaved(res.settings);
+      }
+      setNotice(res.message);
+    } finally {
+      setLoginBusy(null);
+    }
+  };
+
+  const handleActivateSlot = async (providerId: CliAccountProvider, slotId: string) => {
+    setLoginBusy(`act:${providerId}:${slotId}`);
+    setNotice(null);
+    try {
+      const res = await api.activateProviderSlot(providerId, slotId);
+      onProvidersUpdated(res.providers);
+      setForm(res.settings);
+      onSaved(res.settings);
+      setNotice(res.message);
+    } finally {
+      setLoginBusy(null);
+    }
+  };
+
+  const getAgentRoute = (agentId: AgentId): AgentRouteConfig => {
+    const existing = form.agentRoutes?.[agentId];
+    if (existing) return existing;
+    if (agentId === 'orchestrator') {
+      const codexProv = providers.find((p) => p.id === 'codex');
+      return { provider: 'codex', slotId: 'slot-1', model: codexProv?.defaultModel || 'default' };
+    }
+    return { provider: 'gemini_agy', slotId: 'slot-1', model: 'gemini-3.8-flash' };
+  };
+
+  const updateAgentRoute = (agentId: AgentId, patch: Partial<AgentRouteConfig>) => {
+    const current = getAgentRoute(agentId);
+    const nextProvider = patch.provider ?? current.provider;
+    const isCli = nextProvider === 'codex' || nextProvider === 'gemini_agy' || nextProvider === 'claude';
+    const provStatus = providers.find((p) => p.id === nextProvider);
+    const provSlots = provStatus?.slots || [];
+
+    let nextSlotId = patch.slotId !== undefined ? patch.slotId : current.slotId;
+    if (isCli) {
+      if (patch.provider && patch.provider !== current.provider) {
+        nextSlotId = provSlots[0]?.id || 'slot-1';
+      } else if (!nextSlotId || (provSlots.length > 0 && !provSlots.some((s) => s.id === nextSlotId))) {
+        nextSlotId = provSlots[0]?.id || 'slot-1';
+      }
+    } else {
+      nextSlotId = undefined;
+    }
+
+    let nextModel = patch.model ?? current.model;
+    if (patch.provider !== undefined || patch.slotId !== undefined) {
+      if (isCli) {
+        const slot = provSlots.find((s) => s.id === nextSlotId) || provSlots[0];
+        if (agentId === 'orchestrator') {
+          nextModel = slot?.defaultModel || provStatus?.defaultModel || 'default';
+        } else {
+          const flash = slot?.models.find((m) => /flash/i.test(m.id));
+          nextModel =
+            flash?.id ||
+            slot?.defaultModel ||
+            (slot?.cliEngine === 'gemini_cli' ? 'gemini-2.5-flash' : 'gemini-3.8-flash');
+        }
+      } else if (nextProvider === 'ollama') {
+        nextModel = provStatus?.models[0]?.id || form.ollamaModel || 'qwen2.5:7b';
+      } else if (nextProvider === 'gemini_api') {
+        nextModel = form.geminiModel || 'gemini-2.5-flash';
+      } else {
+        nextModel = form.openaiModel || 'gpt-4o-mini';
+      }
+    }
+
+    const baseRoutes: Record<AgentId, AgentRouteConfig> = {
+      orchestrator: getAgentRoute('orchestrator'),
+      file: getAgentRoute('file'),
+      system: getAgentRoute('system'),
+      browser: getAgentRoute('browser'),
+    };
+    baseRoutes[agentId] = {
+      provider: nextProvider,
+      ...(nextSlotId ? { slotId: nextSlotId } : {}),
+      model: nextModel,
+    };
+    setForm((f) => ({ ...f, agentRoutes: baseRoutes }));
+  };
+
+  const handleResetAgentDefaults = () => {
+    const codexSlot1 = providers.find((p) => p.id === 'codex')?.slots?.[0];
+    const gemSlot1 = providers.find((p) => p.id === 'gemini_agy')?.slots?.[0];
+    const strongestCodex =
+      codexSlot1?.models.find((m) => m.id !== 'default')?.id ||
+      codexSlot1?.defaultModel ||
+      'gpt-5.4';
+    const flashGem =
+      gemSlot1?.models.find((m) => /flash/i.test(m.id))?.id ||
+      gemSlot1?.defaultModel ||
+      'gemini-3.8-flash';
+
+    setForm((f) => ({
+      ...f,
+      agentRoutes: {
+        orchestrator: { provider: 'codex', slotId: 'slot-1', model: strongestCodex },
+        file: { provider: 'gemini_agy', slotId: 'slot-1', model: flashGem },
+        system: { provider: 'gemini_agy', slotId: 'slot-1', model: flashGem },
+        browser: { provider: 'gemini_agy', slotId: 'slot-1', model: flashGem },
+      },
+    }));
+    setNotice('Reset agent routes to defaults (Orchestrator → Codex Slot 1; Specialists → Gemini Slot 1 Flash). Click Save to persist.');
   };
 
   const handlePickFolder = async () => {
@@ -423,12 +596,12 @@ export function SettingsModal({
               </>
             )}
 
-            {/* SECTION: AI ACCOUNTS (NO API KEY REQUIRED) */}
+            {/* SECTION: AI ACCOUNTS (MULTI-SLOT CLI ACCOUNTS — ZERO API KEY EXTRACTION) */}
             {section === 'accounts' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
-                    Sign in with your existing Claude, ChatGPT, or Google accounts through their official local CLIs—models load automatically with zero API keys.
+                    Sign in through official local CLIs—zero tokens extracted or stored by Nexus. Add multiple isolated account slots per provider to spread quota across agents.
                   </p>
                   <button
                     type="button"
@@ -441,8 +614,169 @@ export function SettingsModal({
                   </button>
                 </div>
 
-                <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.07] overflow-hidden">
+                <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.08] overflow-hidden">
                   {providers.map((p) => {
+                    const isCliMulti = p.id === 'codex' || p.id === 'gemini_agy' || p.id === 'claude';
+                    const slots = p.slots || [];
+
+                    if (isCliMulti && slots.length > 0) {
+                      const cliProv = p.id as CliAccountProvider;
+                      const addingThis = loginBusy === `add:${cliProv}`;
+                      const signedCount = slots.filter((s) => s.signedIn).length;
+
+                      return (
+                        <div key={p.id} className="divide-y divide-white/[0.05]">
+                          {/* Provider Group Header */}
+                          <div className="px-4 py-3 bg-white/[0.02] flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`w-2 h-2 rounded-full ${
+                                    signedCount > 0 ? 'bg-emerald-400' : p.installed ? 'bg-amber-400' : 'bg-rose-400'
+                                  }`}
+                                />
+                                <span className="text-sm font-semibold text-[var(--text-primary)]">{p.name}</span>
+                                <span className="text-[11px] text-[var(--text-muted)] tabular-nums">
+                                  {signedCount}/{slots.length} signed in
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-[var(--text-muted)] mt-0.5">{p.subtitle}</div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={addingThis}
+                              onClick={() => void handleAddSlot(cliProv)}
+                              className="h-7 px-2.5 rounded-lg border border-white/[0.12] hover:bg-white/[0.06] text-[11px] font-medium text-[var(--text-primary)] inline-flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-50"
+                            >
+                              {addingThis ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                              <span>Add account</span>
+                            </button>
+                          </div>
+
+                          {/* Per-Slot Rows */}
+                          {slots.map((slot) => {
+                            const isActiveSlot = form.provider === cliProv && (form.activeSlots?.[cliProv] || 'slot-1') === slot.id;
+                            const busyLogin = loginBusy === `login:${cliProv}:${slot.id}`;
+                            const busyLogout = loginBusy === `logout:${cliProv}:${slot.id}`;
+                            const busyRemove = loginBusy === `rm:${cliProv}:${slot.id}`;
+                            const engineBadge =
+                              slot.cliEngine === 'agy'
+                                ? 'Antigravity'
+                                : slot.cliEngine === 'gemini_cli'
+                                  ? 'Gemini CLI'
+                                  : slot.cliEngine === 'codex'
+                                    ? 'Codex CLI'
+                                    : 'Claude CLI';
+
+                            return (
+                              <div key={slot.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                                <div className="min-w-0 space-y-0.5">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                        slot.signedIn ? 'bg-emerald-400' : slot.installed ? 'bg-amber-400' : 'bg-rose-400'
+                                      }`}
+                                    />
+                                    <span className="text-xs font-medium text-[var(--text-primary)]">{slot.label}</span>
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.05] text-[var(--text-muted)]">
+                                      {engineBadge}
+                                    </span>
+                                    <span className="text-[11px] text-[var(--text-muted)] tabular-nums">
+                                      {slot.signedIn
+                                        ? `Active · ${slot.models.length} model${slot.models.length === 1 ? '' : 's'}`
+                                        : slot.installed
+                                          ? copy.notSignedIn
+                                          : copy.notInstalled}
+                                    </span>
+                                  </div>
+                                  {slot.accountLabel && (
+                                    <div className="text-[11px] text-emerald-300/90 truncate">{slot.accountLabel}</div>
+                                  )}
+                                  {slot.error && !slot.signedIn && (
+                                    <div className="text-[11px] text-rose-300/90">{slot.error}</div>
+                                  )}
+                                  <div className="text-[10px] font-mono text-[var(--text-muted)] truncate">
+                                    {slot.homeDirHint}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {slot.signedIn && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleActivateSlot(cliProv, slot.id)}
+                                      className={`h-7 px-2.5 rounded-lg text-[11px] font-medium cursor-pointer border ${
+                                        isActiveSlot
+                                          ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                                          : 'border-white/[0.1] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                      }`}
+                                    >
+                                      {isActiveSlot ? 'Active' : 'Use'}
+                                    </button>
+                                  )}
+
+                                  {slot.canLogin && (
+                                    <button
+                                      type="button"
+                                      disabled={busyLogin}
+                                      onClick={() => void handleSlotLogin(cliProv, slot.id)}
+                                      className="h-7 px-2.5 rounded-lg text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                      style={
+                                        slot.signedIn
+                                          ? { backgroundColor: 'rgba(255,255,255,0.06)', color: 'var(--text-primary)' }
+                                          : { backgroundColor: 'var(--accent)', color: 'var(--accent-fg)' }
+                                      }
+                                    >
+                                      {busyLogin ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <LogIn className="w-3 h-3" />
+                                      )}
+                                      <span>{slot.signedIn ? 'Switch' : 'Sign in'}</span>
+                                    </button>
+                                  )}
+
+                                  {slot.signedIn && slot.canLogout && (
+                                    <button
+                                      type="button"
+                                      disabled={busyLogout}
+                                      onClick={() => void handleSlotLogout(cliProv, slot.id)}
+                                      title={`Sign out from ${slot.label}`}
+                                      className="h-7 px-2.5 rounded-lg border border-white/[0.1] hover:border-rose-500/40 hover:bg-rose-500/15 text-[11px] text-[var(--text-secondary)] hover:text-rose-200 inline-flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
+                                    >
+                                      {busyLogout ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <LogOut className="w-3 h-3" />
+                                      )}
+                                      <span>Sign out</span>
+                                    </button>
+                                  )}
+
+                                  {!slot.isDefault && (
+                                    <button
+                                      type="button"
+                                      disabled={busyRemove}
+                                      onClick={() => void handleRemoveSlot(cliProv, slot.id)}
+                                      title="Remove slot from Nexus config (keeps data/cli-homes folder on disk)"
+                                      className="h-7 w-7 rounded-lg border border-white/[0.08] hover:border-rose-500/40 hover:bg-rose-500/15 text-[var(--text-muted)] hover:text-rose-300 inline-flex items-center justify-center cursor-pointer transition-colors disabled:opacity-50"
+                                    >
+                                      {busyRemove ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Trash2 className="w-3 h-3" />
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
+
+                    // Local AI (Ollama) row preserved as-is
                     const isSelected = form.provider === p.id;
                     return (
                       <div key={p.id} className="p-4 flex items-center justify-between gap-4">
@@ -525,48 +859,248 @@ export function SettingsModal({
                   })}
                 </div>
 
-                {/* Collapsed optional API key fallback */}
+                {/* Collapsed optional API key fallbacks (preserved for per-agent routing) */}
                 <details className="rounded-xl border border-white/[0.07] px-4 py-3">
                   <summary className="text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)]">
-                    Optional: Custom OpenAI-compatible or Gemini API Key fallback
+                    Optional fallback engines: Gemini API Key & OpenAI-compatible API
                   </summary>
                   <div className="mt-3 space-y-3 pt-3 border-t border-white/[0.06]">
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="text"
-                        value={form.openaiBaseUrl}
-                        onChange={(e) => setForm((f) => ({ ...f, openaiBaseUrl: e.target.value }))}
-                        placeholder="https://api.openai.com/v1"
-                        className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
-                      />
-                      <input
-                        type="password"
-                        value={form.openaiApiKey}
-                        onChange={(e) => setForm((f) => ({ ...f, openaiApiKey: e.target.value }))}
-                        placeholder="Optional API Key"
-                        className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
-                      />
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-medium text-[var(--text-secondary)]">Gemini API Key Fallback</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="password"
+                          value={form.geminiApiKey}
+                          onChange={(e) => setForm((f) => ({ ...f, geminiApiKey: e.target.value }))}
+                          placeholder="GEMINI_API_KEY (optional)"
+                          className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={form.geminiModel}
+                          onChange={(e) => setForm((f) => ({ ...f, geminiModel: e.target.value }))}
+                          placeholder="gemini-2.5-flash"
+                          className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] font-medium text-[var(--text-secondary)]">OpenAI-Compatible API Fallback</div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          value={form.openaiBaseUrl}
+                          onChange={(e) => setForm((f) => ({ ...f, openaiBaseUrl: e.target.value }))}
+                          placeholder="https://api.openai.com/v1"
+                          className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
+                        />
+                        <input
+                          type="password"
+                          value={form.openaiApiKey}
+                          onChange={(e) => setForm((f) => ({ ...f, openaiApiKey: e.target.value }))}
+                          placeholder="API Key (optional)"
+                          className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
+                        />
+                        <input
+                          type="text"
+                          value={form.openaiModel}
+                          onChange={(e) => setForm((f) => ({ ...f, openaiModel: e.target.value }))}
+                          placeholder="gpt-4o-mini"
+                          className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none"
+                        />
+                      </div>
                     </div>
                   </div>
                 </details>
               </div>
             )}
 
-            {/* SECTION: AGENTS */}
+            {/* SECTION: AGENTS (PER-AGENT PROVIDER → ACCOUNT SLOT → MODEL ROUTING) */}
             {section === 'agents' && (
-              <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.07]">
-                {AGENT_ROSTER.map((a) => (
-                  <div key={a.id} className="p-4 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-[var(--text-primary)]">{a.name}</span>
-                      <span className="text-[11px] text-[var(--text-muted)]">{a.khmerRole}</span>
-                    </div>
-                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{a.description}</p>
-                    <div className="text-[11px] text-[var(--text-muted)] pt-1">
-                      Skills: {a.capabilities.join(' · ')}
-                    </div>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                    Assign each agent its own provider, account slot, and model. Agents never sign in on their own—they reuse the assigned slot&apos;s official CLI login.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleResetAgentDefaults}
+                    className="h-8 px-3 rounded-lg border border-white/[0.1] hover:bg-white/[0.06] text-xs text-[var(--text-primary)] cursor-pointer shrink-0"
+                  >
+                    Reset defaults
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.07]">
+                  {AGENT_ROSTER.map((a) => {
+                    const route = getAgentRoute(a.id);
+                    const isCliProv =
+                      route.provider === 'codex' ||
+                      route.provider === 'gemini_agy' ||
+                      route.provider === 'claude';
+                    const provMeta = providers.find((p) => p.id === route.provider);
+                    const slots = provMeta?.slots || [];
+                    const selectedSlot = slots.find((s) => s.id === (route.slotId || 'slot-1')) || slots[0];
+                    const slotModels = isCliProv
+                      ? selectedSlot?.models || []
+                      : route.provider === 'ollama'
+                        ? provMeta?.models || []
+                        : [];
+
+                    return (
+                      <div key={a.id} className="p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-semibold text-[var(--text-primary)]">{a.name}</div>
+                            <div className="text-[11px] text-[var(--text-muted)]">{a.description}</div>
+                          </div>
+                          <span className="text-[11px] text-[var(--text-muted)] shrink-0">{a.khmerRole}</span>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                          {/* 1. Provider */}
+                          <div className="space-y-1">
+                            <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                              Provider
+                            </label>
+                            <select
+                              value={route.provider}
+                              onChange={(e) =>
+                                updateAgentRoute(a.id, { provider: e.target.value as ProviderType })
+                              }
+                              className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                            >
+                              <option value="codex">Codex (ChatGPT CLI)</option>
+                              <option value="gemini_agy">Gemini (Google CLI)</option>
+                              <option value="claude">Claude Code (CLI)</option>
+                              <option value="ollama">Local AI (Ollama)</option>
+                              <option value="gemini_api">Gemini API Key (Fallback)</option>
+                              <option value="openai_compatible">OpenAI-Compatible (Fallback)</option>
+                            </select>
+                          </div>
+
+                          {/* 2. Account Slot */}
+                          <div className="space-y-1">
+                            <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                              Account slot
+                            </label>
+                            {isCliProv ? (
+                              <select
+                                value={route.slotId || 'slot-1'}
+                                onChange={(e) => updateAgentRoute(a.id, { slotId: e.target.value })}
+                                className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                              >
+                                {slots.length > 0 ? (
+                                  slots.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.label} · {s.signedIn ? 'Active' : 'Not signed in'}
+                                    </option>
+                                  ))
+                                ) : (
+                                  <option value="slot-1">Account 1 (Default)</option>
+                                )}
+                              </select>
+                            ) : (
+                              <div className="h-8 px-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06] text-[11px] text-[var(--text-muted)] flex items-center">
+                                {route.provider === 'ollama' ? 'Local Ollama server' : 'API Key fallback'}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. Model */}
+                          <div className="space-y-1">
+                            <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                              Model
+                            </label>
+                            {isCliProv || (route.provider === 'ollama' && slotModels.length > 0) ? (
+                              <select
+                                value={route.model}
+                                onChange={(e) => updateAgentRoute(a.id, { model: e.target.value })}
+                                className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                              >
+                                {slotModels.length > 0 ? (
+                                  <>
+                                    {!slotModels.some((m) => m.id === route.model) && route.model && (
+                                      <option value={route.model}>{route.model}</option>
+                                    )}
+                                    {slotModels.map((m) => (
+                                      <option key={m.id} value={m.id}>
+                                        {m.label}
+                                      </option>
+                                    ))}
+                                  </>
+                                ) : (
+                                  <option value={route.model || 'default'}>
+                                    {route.model || 'default'} (sign in to load models)
+                                  </option>
+                                )}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={route.model}
+                                onChange={(e) => updateAgentRoute(a.id, { model: e.target.value })}
+                                placeholder={
+                                  route.provider === 'gemini_api'
+                                    ? 'gemini-2.5-flash'
+                                    : route.provider === 'ollama'
+                                      ? 'qwen2.5:7b'
+                                      : 'gpt-4o-mini'
+                                }
+                                className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs font-mono text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        {isCliProv && selectedSlot && !selectedSlot.signedIn && (
+                          <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200">
+                            <span>
+                              {selectedSlot.label} is not signed in. Other agents on other slots will still work.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setSection('accounts')}
+                              className="underline font-medium cursor-pointer shrink-0"
+                            >
+                              Sign in
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Honest CLI Safety Mode Enforcement Summary */}
+                <details className="rounded-xl border border-white/[0.07] px-4 py-3">
+                  <summary className="text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)]">
+                    Safety mode enforcement across CLI engines (honest capability map)
+                  </summary>
+                  <div className="mt-3 pt-3 border-t border-white/[0.06] space-y-2 text-[11px] text-[var(--text-secondary)]">
+                    {(['codex', 'agy', 'gemini_cli', 'claude', 'native'] as const).map((eng) => {
+                      const info = CLI_SAFETY_SUPPORT[eng][form.safetyMode];
+                      const label =
+                        eng === 'codex'
+                          ? 'Codex CLI'
+                          : eng === 'agy'
+                            ? 'Antigravity (Slot 1)'
+                            : eng === 'gemini_cli'
+                              ? 'Gemini CLI (Slot 2+)'
+                              : eng === 'claude'
+                                ? 'Claude Code CLI'
+                                : 'Ollama / API Key';
+                      return (
+                        <div key={eng} className="flex items-start justify-between gap-3">
+                          <span className="font-medium text-[var(--text-primary)] shrink-0">{label}</span>
+                          <span className="text-right text-[var(--text-muted)]">
+                            <code className="text-[10px] text-sky-300">{info.flagSummary}</code> — {info.note}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                </details>
               </div>
             )}
 

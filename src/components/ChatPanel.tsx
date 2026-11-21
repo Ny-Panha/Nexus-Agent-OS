@@ -65,7 +65,7 @@ interface ChatPanelProps {
   onSelectEffort: (effort: EffortLevel) => void;
   onSelectPermission: (mode: SafetyMode) => void;
   onDecideApproval: (approvalId: string, approved: boolean, rememberForSession?: boolean) => void;
-  onTriggerLogin: (provider: ProviderType) => Promise<void>;
+  onTriggerLogin: (provider: ProviderType, slotId?: string) => Promise<void>;
   onRefreshProviders: () => Promise<void>;
   onTogglePin: (messageId: string) => void;
   onQuickScreenshot: () => void;
@@ -401,6 +401,42 @@ export function ChatPanel({
               const isPinned = pinnedIds.includes(msg.id);
               return (
                 <article key={msg.id} className="group space-y-2">
+                  {/* Per-Agent Routing Handoff Provenance */}
+                  {msg.handoffs && msg.handoffs.length > 0 && (
+                    <div className="rounded-xl border border-white/[0.08] bg-black/20 divide-y divide-white/[0.06] overflow-hidden mb-1">
+                      {msg.handoffs.map((h) => (
+                        <div key={h.id} className="px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <AgentPill agent={h.from} compact />
+                            <ArrowRight className="w-3 h-3 text-[var(--text-muted)] shrink-0" />
+                            <AgentPill agent={h.to} compact />
+                            <span className="text-[var(--text-secondary)] truncate max-w-[260px]">{h.task}</span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0 text-[10px] font-mono text-[var(--text-muted)]">
+                            {h.provider && (
+                              <span>
+                                {h.provider}
+                                {h.slotLabel ? ` · ${h.slotLabel}` : h.slotId ? ` · ${h.slotId}` : ''}
+                                {h.model ? ` · ${h.model}` : ''}
+                              </span>
+                            )}
+                            <span
+                              className={
+                                h.status === 'completed'
+                                  ? 'text-emerald-400'
+                                  : h.status === 'error'
+                                    ? 'text-rose-400'
+                                    : 'text-amber-300'
+                              }
+                            >
+                              {h.status}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {msg.toolTraces && msg.toolTraces.length > 0 && (
                     <CollapsibleSteps traces={msg.toolTraces} language={settings.language} />
                   )}
@@ -411,6 +447,23 @@ export function ChatPanel({
                     </div>
                   ) : (
                     <FormattedProse text={msg.content} sizeClass={textSizeClass} />
+                  )}
+
+                  {/* Isolated Per-Agent Account/Quota Errors (other agents keep working) */}
+                  {msg.agentErrors && msg.agentErrors.length > 0 && (
+                    <div className="pt-1 space-y-2">
+                      {msg.agentErrors.map((ae, idx) => (
+                        <NeedsAttentionCard
+                          key={`${msg.id}-ae-${idx}`}
+                          language={settings.language}
+                          message={ae.message}
+                          action={ae.action}
+                          onTriggerLogin={onTriggerLogin}
+                          onRefreshProviders={onRefreshProviders}
+                          onOpenAccountsSettings={() => onOpenSettings('accounts')}
+                        />
+                      ))}
+                    </div>
                   )}
 
                   {/* Inline Screenshots */}
@@ -433,10 +486,16 @@ export function ChatPanel({
                   )}
 
                   {/* Subtle Token Footnote & Quiet Actions */}
-                  <div className="flex items-center gap-3 pt-0.5 text-[11px] text-[var(--text-muted)] tabular-nums">
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-[var(--text-muted)] tabular-nums">
                     {msg.usage && (
                       <span>
                         {formatTokenShort(msg.usage.inputTokens)} in · {formatTokenShort(msg.usage.outputTokens)} out tokens
+                      </span>
+                    )}
+                    {msg.provider && (
+                      <span className="opacity-75">
+                        · {msg.provider}
+                        {msg.slotLabel ? ` (${msg.slotLabel})` : ''}
                       </span>
                     )}
                     {msg.model && <span className="opacity-75">· {msg.model}</span>}
@@ -539,7 +598,7 @@ export function ChatPanel({
         onSelectPermission={onSelectPermission}
         onSelectTarget={onChangeTarget}
         onRunPreset={onRunPreset}
-        onTriggerLogin={(p) => void onTriggerLogin(p)}
+        onTriggerLogin={(p, slotId) => void onTriggerLogin(p, slotId)}
         onQuickScreenshot={onQuickScreenshot}
         onOpenCommandPalette={onOpenCommandPalette}
       />
