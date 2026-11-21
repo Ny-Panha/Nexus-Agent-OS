@@ -1,28 +1,24 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T01:07:30+07:00
+- **Last Session**: IDE — 2026-11-22T02:51:30+07:00
 - **Summary**:
-  - **Account Sign-Out / Logout Feature Added & Verified (`ot mean btn logout pg?`)**:
-    - Added `POST /api/providers/:id/logout` in `server/index.ts`:
-      - Disposes warm persistent CLI worker pools (`disposeAllWarmWorkers`).
-      - Records disconnected provider state in `settings.disconnectedProviders`.
-      - Executes native CLI unauth where supported (`claude auth logout`, `codex logout`).
-      - Resets provider status to `signedIn: false` with one-click `Sign in again` reconnect button.
-    - Updated `server/llm/providerRegistry.ts`:
-      - Providers emit `canLogout: true` and `logoutActionLabel: 'Sign out'` when signed in.
-      - Safe virtual disconnection for `gemini_agy` without damaging global Antigravity IDE credentials.
-    - Added UI controls in `src/components/SettingsModal.tsx`:
-      - **AI accounts tab**: Added `[LogOut Sign out]` red-accent button next to active/use buttons for each connected account.
-      - **General tab**: Added `[Sign out]` button in the top active account card.
-    - Added `api.logoutProvider(provider)` in `src/lib/api.ts`.
-  - **Build & TypeScript Verification**:
-    - `npm run typecheck`: **PASS** (0 errors).
-    - `npm run build`: **PASS** (client + server bundles compiled into `dist/` and `dist-server/`).
+  - **Git Repository & Remote Push**:
+    - Repository initialized and tracked on branch `main`.
+    - Added `ollama_models/` to `.gitignore` to prevent 2GB LLaMA binary from exceeding GitHub's 100MB file limit.
+    - Staged and committed complete v2.0 Studio architecture:
+      - Frameless Studio UI: TopBar (`Ctrl+K` palette + glass slider), floating Sidebar, ChatPanel with live `text_delta` streaming + elapsed time, upward ComposerBar popovers (`Provider`, `Model`, `Effort`, `Permission`, `Context Ring`), and 4-zone InspectorPanel.
+      - Zero-API-key Account-Login Engine (`Gemini via Antigravity agy`, `Codex via ChatGPT`, `Claude Code`, `Local AI Ollama`).
+      - Account sign-out / logout feature (`POST /api/providers/:id/logout` + UI buttons in AI accounts & General settings tabs).
+      - Warm Persistent Worker Pool & Quota auto-fallback.
+    - Pushed commit `cf9c470` to remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
+  - **Verification**:
+    - `git status`: Clean working tree on branch `main`.
+    - Remote URL updated to `https://github.com/Ny-Panha/Nexus-Agent-OS.git`.
 - **Active Environment**:
   - Project Path: `c:\Users\nhastar\Desktop\nexus-agent-os`
+  - GitHub Remote: `https://github.com/Ny-Panha/Nexus-Agent-OS.git`
   - Local Agent Server: `http://127.0.0.1:4310` (WebSocket: `ws://127.0.0.1:4310/ws`)
   - Vite Dev UI: `http://127.0.0.1:5178`
   - Launch Commands: `npm run start:desktop` or double-click `start-nexus-app.bat`
 - **Next Steps**:
-  - Close the currently opened old Electron desktop window.
-  - Re-run `npm run start:desktop` or double-click `start-nexus-app.bat` to see the new **Sign out** buttons in Settings!
+  - Codebase is fully synchronized with GitHub remote `main`.
