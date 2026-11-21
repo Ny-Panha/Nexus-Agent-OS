@@ -1,0 +1,294 @@
+export type AgentId = 'orchestrator' | 'file' | 'system' | 'browser';
+
+export type TargetMode = 'auto' | AgentId;
+
+export type SafetyMode = 'read_only' | 'smart' | 'safe' | 'full_auto';
+
+export type ToolRisk = 'read' | 'write' | 'danger';
+
+export type ProviderType =
+  | 'gemini_agy'
+  | 'codex'
+  | 'claude'
+  | 'ollama'
+  | 'gemini_api'
+  | 'openai_compatible';
+
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export type ThemeId =
+  | 'midnight'
+  | 'angkor'
+  | 'tonle_sap'
+  | 'royal_lacquer'
+  | 'forest'
+  | 'sakura'
+  | 'sunset'
+  | 'cyberpunk';
+
+export type UiLanguage = 'en' | 'km';
+
+export type TextSize = 'small' | 'default' | 'large';
+
+export type AgentRunState =
+  | 'idle'
+  | 'thinking'
+  | 'running_tool'
+  | 'waiting_approval'
+  | 'done'
+  | 'error';
+
+export interface AgentMeta {
+  id: AgentId;
+  name: string;
+  khmerRole: string;
+  description: string;
+  accent: string;
+  capabilities: string[];
+}
+
+export const AGENT_ROSTER: AgentMeta[] = [
+  {
+    id: 'orchestrator',
+    name: 'Nexus Agent',
+    khmerRole: 'មេក្រុមចែកការងារ',
+    description:
+      'Knows every workspace tool and specialist agent, plans tasks, delegates work, and synthesizes clear answers.',
+    accent: 'amber',
+    capabilities: ['Task Planning', 'Agent Delegation', 'Parallel Execution', 'Result Synthesis'],
+  },
+  {
+    id: 'file',
+    name: 'File Agent',
+    khmerRole: 'គ្រប់គ្រង File & Folder',
+    description:
+      'Lists, searches, reads, creates, edits, moves, and organizes files and folders anywhere on your laptop.',
+    accent: 'cyan',
+    capabilities: ['Directory Tree', 'Read / Write Files', 'Content Search', 'Organize / Cleanup'],
+  },
+  {
+    id: 'system',
+    name: 'System Agent',
+    khmerRole: 'បញ្ជា PowerShell & Apps',
+    description:
+      'Runs PowerShell commands, launches Windows apps, monitors CPU/RAM/processes, reads clipboard, and captures screenshots.',
+    accent: 'emerald',
+    capabilities: ['PowerShell / CMD', 'Launch Apps', 'System Monitor', 'Screen Capture'],
+  },
+  {
+    id: 'browser',
+    name: 'Browser Agent',
+    khmerRole: 'ស្រាវជ្រាវ Web & Browser',
+    description:
+      'Searches the web, fetches and parses live web pages, inspects rendered DOM, and opens URLs in your browser.',
+    accent: 'violet',
+    capabilities: ['Web Search', 'Fetch & Parse URL', 'DOM Inspection', 'Open Browser Tabs'],
+  },
+];
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  description?: string;
+  contextWindow?: number;
+  effortVariants?: Partial<Record<EffortLevel, string>>;
+}
+
+export interface ProviderAccountStatus {
+  id: ProviderType;
+  name: string;
+  shortName: string;
+  subtitle: string;
+  installed: boolean;
+  signedIn: boolean;
+  binaryPath?: string;
+  accountLabel?: string;
+  profileHint?: string;
+  models: ModelOption[];
+  defaultModel: string;
+  error?: string;
+  canLogin: boolean;
+  loginActionLabel?: string;
+  canLogout?: boolean;
+  logoutActionLabel?: string;
+}
+
+export interface TokenUsageStats {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  contextWindow: number;
+  estimated?: boolean;
+}
+
+export interface NeedsAttentionAction {
+  type: 'login' | 'start_ollama' | 'open_settings' | 'install_cli';
+  provider: ProviderType;
+  label: string;
+  detail?: string;
+}
+
+export interface AppSettings {
+  provider: ProviderType;
+  effort: EffortLevel;
+  selectedModels: Partial<Record<ProviderType, string>>;
+  disconnectedProviders?: ProviderType[];
+  userName: string;
+  language: UiLanguage;
+  theme: ThemeId;
+  glassOpacity: number;
+  textSize: TextSize;
+  safetyMode: SafetyMode;
+  defaultWorkspace: string;
+  maxToolSteps: number;
+  // Local / optional API fallback settings
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  geminiApiKey: string;
+  geminiModel: string;
+  openaiBaseUrl: string;
+  openaiApiKey: string;
+  openaiModel: string;
+}
+
+export interface WorkflowPreset {
+  id: string;
+  name: string;
+  khmerLabel: string;
+  description: string;
+  target: TargetMode;
+  prompt: string;
+  agentsInvolved: AgentId[];
+  builtIn?: boolean;
+}
+
+export interface PlanStep {
+  id: string;
+  title: string;
+  agent: AgentId;
+  detail: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+}
+
+export interface ToolCallTrace {
+  id: string;
+  sessionId: string;
+  agent: AgentId;
+  toolName: string;
+  args: Record<string, unknown>;
+  risk: ToolRisk;
+  status: 'pending_approval' | 'running' | 'completed' | 'denied' | 'error';
+  output?: string;
+  error?: string;
+  imageDataUrl?: string;
+  startedAt: string;
+  finishedAt?: string;
+  durationMs?: number;
+}
+
+export interface AgentHandoff {
+  id: string;
+  from: AgentId;
+  to: AgentId;
+  task: string;
+  status: 'running' | 'completed' | 'error';
+  summary?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface PendingApproval {
+  id: string;
+  sessionId: string;
+  agent: AgentId;
+  toolName: string;
+  args: Record<string, unknown>;
+  risk: ToolRisk;
+  reason: string;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  kind?: 'message' | 'handoff_divider' | 'needs_attention';
+  agent?: AgentId;
+  provider?: ProviderType;
+  model?: string;
+  content: string;
+  createdAt: string;
+  plan?: PlanStep[];
+  handoffs?: AgentHandoff[];
+  toolTraces?: ToolCallTrace[];
+  screenshots?: Array<{ label: string; dataUrl: string; filePath?: string }>;
+  usage?: TokenUsageStats;
+  actionCta?: NeedsAttentionAction;
+  error?: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+  pinnedMessageIds?: string[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  sessionId: string;
+  agent: AgentId;
+  toolName: string;
+  risk: ToolRisk;
+  decision: 'auto_allowed' | 'user_allowed' | 'user_denied';
+  argsPreview: string;
+  status: 'completed' | 'denied' | 'error';
+  durationMs?: number;
+  summary?: string;
+}
+
+export interface SystemTelemetry {
+  hostname: string;
+  username: string;
+  platform: string;
+  osRelease: string;
+  arch: string;
+  cpuModel: string;
+  cpuCores: number;
+  totalMemoryGb: number;
+  freeMemoryGb: number;
+  usedMemoryPercent: number;
+  uptimeHours: number;
+  homeDir: string;
+  desktopDir: string;
+  cwd: string;
+  drives: Array<{ name: string; freeGb: number; usedGb: number; totalGb: number }>;
+  topProcesses: Array<{ name: string; pid: number; cpuSec: number; memMb: number }>;
+  timestamp: string;
+}
+
+export interface StorageStats {
+  dataDir: string;
+  sessionsCount: number;
+  auditLogsCount: number;
+  screenshotsCount: number;
+  totalBytes: number;
+}
+
+export type ServerWsEvent =
+  | { type: 'connected'; timestamp: string }
+  | { type: 'agent_state'; agent: AgentId; state: AgentRunState; detail?: string }
+  | { type: 'run_started'; sessionId: string; runId: string; target: TargetMode }
+  | { type: 'run_finished'; sessionId: string; runId: string; message: ChatMessage }
+  | { type: 'run_error'; sessionId: string; runId: string; error: string }
+  | { type: 'plan_updated'; sessionId: string; steps: PlanStep[] }
+  | { type: 'handoff_event'; sessionId: string; handoff: AgentHandoff }
+  | { type: 'tool_event'; sessionId: string; trace: ToolCallTrace }
+  | { type: 'approval_required'; approval: PendingApproval }
+  | { type: 'approval_resolved'; approvalId: string; approved: boolean }
+  | { type: 'audit_entry'; entry: AuditLogEntry }
+  | { type: 'assistant_note'; sessionId: string; agent: AgentId; text: string }
+  | { type: 'stream_delta'; sessionId: string; agent: AgentId; delta: string };
