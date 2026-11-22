@@ -10,6 +10,7 @@ import type {
   AgentId,
   AppSettings,
   CliAccountProvider,
+  EffortLevel,
   ModelOption,
   ProviderAccountStatus,
   ProviderType,
@@ -311,17 +312,34 @@ async function inspectAgySlot(
     }
   }
 
+  const effortOrder: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const effortPretty: Record<EffortLevel, string> = {
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'Extra High',
+    max: 'Max',
+  };
+
   const models: ModelOption[] = Array.from(grouped.values()).map((entry) => {
     if (entry.effortVariants) {
-      const keys = Object.keys(entry.effortVariants);
-      const order = ['low', 'medium', 'high', 'xhigh', 'max'];
-      keys.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const keys = (Object.keys(entry.effortVariants) as EffortLevel[]).sort(
+        (a, b) => effortOrder.indexOf(a) - effortOrder.indexOf(b),
+      );
       return {
         ...entry,
-        description: `Antigravity · Efforts: ${keys.join(', ')}`,
+        supportedEfforts: keys.length > 1 ? keys : undefined,
+        description:
+          keys.length > 1
+            ? keys.map((k) => effortPretty[k]).join(' · ')
+            : 'Antigravity',
       };
     }
-    return entry;
+    return {
+      ...entry,
+      supportedEfforts: undefined,
+      description: 'Antigravity',
+    };
   });
 
   const signedIn = res.exitCode === 0 && models.length > 0;
@@ -355,11 +373,24 @@ async function inspectAgySlot(
 }
 
 const GEMINI_CLI_FALLBACK_MODELS: ModelOption[] = [
-  { id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash', description: 'Fast Gemini CLI model', contextWindow: 1_048_576 },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', description: 'Balanced fast Flash model', contextWindow: 1_048_576 },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Deep reasoning Pro model', contextWindow: 1_048_576 },
-  { id: 'auto', label: 'Auto (Gemini CLI)', description: 'Let Gemini CLI choose best model', contextWindow: 1_048_576 },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Gemini CLI', contextWindow: 1_048_576 },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: 'Gemini CLI', contextWindow: 1_048_576 },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Gemini CLI', contextWindow: 1_048_576 },
+  { id: 'auto', label: 'Auto', description: 'Let Gemini CLI choose', contextWindow: 1_048_576 },
 ];
+
+function formatGeminiCliModelLabel(id: string, rawLabel: string): string {
+  if (id.toLowerCase() === 'auto') return 'Auto';
+  const base = rawLabel && rawLabel !== id ? rawLabel : id;
+  return base
+    .replace(/-customtools$/i, '')
+    .split('-')
+    .map((part) => {
+      if (/^[0-9.]+$/.test(part)) return part;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
 
 async function inspectGeminiCliSlot(
   slot: AccountSlotConfig,
@@ -449,33 +480,26 @@ async function inspectGeminiCliSlot(
       const m = line.match(/^([a-z0-9][a-z0-9._-]+)\s+\(([^)]+)\)\s*$/i);
       if (m) {
         const id = m[1].trim();
-        const label = m[2].trim();
+        const rawLabel = m[2].trim();
         if (!parsedModels.some((x) => x.id === id)) {
           parsedModels.push({
             id,
-            label: label === id ? id : `${label} (${id})`,
-            description: 'Gemini CLI isolated slot model',
+            label: formatGeminiCliModelLabel(id, rawLabel),
+            description: id === 'auto' ? 'Automatic model routing' : id,
             contextWindow: 1_048_576,
           });
         }
       }
     }
     models = parsedModels.length > 0 ? [...parsedModels] : [...GEMINI_CLI_FALLBACK_MODELS];
-    // Always ensure Flash model option exists for fast specialist routing
-    if (!models.some((m) => m.id === 'gemini-2.5-flash')) {
-      models.push({
-        id: 'gemini-2.5-flash',
-        label: 'Gemini 2.5 Flash',
-        description: 'Fast Flash model (Gemini CLI)',
-        contextWindow: 1_048_576,
-      });
-    }
   }
 
   const preferredDefault =
+    models.find((m) => m.id === 'gemini-3.8-flash')?.id ||
     models.find((m) => /flash/i.test(m.id))?.id ||
+    models.find((m) => m.id !== 'auto')?.id ||
     models[0]?.id ||
-    'gemini-2.5-flash';
+    'gemini-3.8-flash';
 
   const accountLabel = activeEmail
     ? `${activeEmail} (Gemini CLI)`
@@ -517,20 +541,63 @@ async function readCodexConfigModel(codexHomeDir: string): Promise<string | unde
   }
 }
 
+async function readCodexCachedModels(codexHomeDir: string): Promise<ModelOption[]> {
+  const validEfforts = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
+  const effortOrder: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+  try {
+    const raw = await fs.readFile(path.join(codexHomeDir, 'models_cache.json'), 'utf8');
+    const parsed = JSON.parse(raw) as
+      | Array<Record<string, unknown>>
+      | { models?: Array<Record<string, unknown>> };
+    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed.models) ? parsed.models : [];
+    const results: ModelOption[] = [];
+
+    for (const item of items) {
+      if (item.visibility && item.visibility !== 'list') continue;
+      const slug = typeof item.slug === 'string' ? item.slug.trim() : typeof item.id === 'string' ? item.id.trim() : '';
+      if (!slug || results.some((m) => m.id === slug)) continue;
+
+      const rawName =
+        typeof item.display_name === 'string' && item.display_name.trim()
+          ? item.display_name.trim()
+          : slug;
+      // Clean hyphens like "GPT-6.2-Astra" -> "GPT-6.2 Astra"
+      const cleanName = rawName.replace(/^(GPT-[0-9.]+)-([A-Za-z]+)/i, '$1 $2');
+
+      const rawLevels = Array.isArray(item.supported_reasoning_levels)
+        ? item.supported_reasoning_levels
+        : [];
+      const efforts: EffortLevel[] = [];
+      for (const lvl of rawLevels) {
+        const eff = typeof lvl === 'string' ? lvl : (lvl as { effort?: unknown })?.effort;
+        if (typeof eff === 'string' && validEfforts.has(eff as EffortLevel) && !efforts.includes(eff as EffortLevel)) {
+          efforts.push(eff as EffortLevel);
+        }
+      }
+      efforts.sort((a, b) => effortOrder.indexOf(a) - effortOrder.indexOf(b));
+
+      results.push({
+        id: slug,
+        label: cleanName,
+        description:
+          typeof item.description === 'string' && item.description.trim()
+            ? item.description.trim()
+            : 'Codex account model',
+        contextWindow: typeof item.context_window === 'number' ? item.context_window : 272_000,
+        supportedEfforts: efforts.length > 1 ? efforts : undefined,
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 async function inspectCodexSlot(
   slot: AccountSlotConfig,
   binaryPath: string | undefined,
   settings: AppSettings,
 ): Promise<AccountSlotStatus> {
-  const baseModels: ModelOption[] = [
-    { id: 'default', label: 'Default (ChatGPT Account)', description: 'Uses your active Codex plan model', contextWindow: 256_000 },
-    { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Flagship reasoning & coding', contextWindow: 400_000 },
-    { id: 'gpt-5.3-codex', label: 'GPT-5.3 Codex', description: 'Specialized agentic coding', contextWindow: 400_000 },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini', description: 'Fast everyday tasks', contextWindow: 400_000 },
-    { id: 'o3', label: 'o3', description: 'Deep analytical reasoning', contextWindow: 200_000 },
-    { id: 'o4-mini', label: 'o4-mini', description: 'Fast reasoning', contextWindow: 200_000 },
-  ];
-
   const absHome = resolveSlotHomeAbs('codex', slot);
   const homeDirHint = slot.homeDir || '~/.codex';
   const isDisconnected = Boolean(slot.disconnected || (slot.id === 'slot-1' && settings.disconnectedProviders?.includes('codex')));
@@ -583,16 +650,37 @@ async function inspectCodexSlot(
   const combined = `${res.stdout}\n${res.stderr}`.trim();
   const signedIn = /logged in/i.test(combined) && !/not logged in/i.test(combined);
   const codexHomeDir = absHome || path.join(os.homedir(), '.codex');
-  const configuredModel = await readCodexConfigModel(codexHomeDir);
+  const [configuredModel, cachedModels] = await Promise.all([
+    readCodexConfigModel(codexHomeDir),
+    readCodexCachedModels(codexHomeDir),
+  ]);
 
-  const models = [...baseModels];
-  if (configuredModel && !models.some((m) => m.id === configuredModel)) {
-    models.splice(1, 0, {
-      id: configuredModel,
-      label: `${configuredModel} (Configured)`,
-      description: `From ${homeDirHint}/config.toml`,
-      contextWindow: 400_000,
-    });
+  let models: ModelOption[] = [...cachedModels];
+  if (configuredModel) {
+    const existingIdx = models.findIndex((m) => m.id === configuredModel);
+    if (existingIdx > 0) {
+      const [picked] = models.splice(existingIdx, 1);
+      models.unshift(picked);
+    } else if (existingIdx === -1) {
+      models.unshift({
+        id: configuredModel,
+        label: configuredModel.replace(/^(gpt-[0-9.]+)-([a-z]+)/i, (_m, a, b) => `${a.toUpperCase()} ${b.charAt(0).toUpperCase()}${b.slice(1)}`),
+        description: 'Configured in Codex CLI',
+        contextWindow: 272_000,
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      });
+    }
+  }
+  if (models.length === 0) {
+    models = [
+      {
+        id: 'default',
+        label: 'Default (ChatGPT Account)',
+        description: 'Uses your active Codex plan model',
+        contextWindow: 272_000,
+        supportedEfforts: ['low', 'medium', 'high', 'xhigh'],
+      },
+    ];
   }
 
   const firstCleanLine = res.stdout
@@ -612,7 +700,7 @@ async function inspectCodexSlot(
     binaryPath,
     accountLabel: signedIn ? firstCleanLine || 'Logged in using ChatGPT' : undefined,
     models: signedIn ? models : [],
-    defaultModel: configuredModel || 'gpt-5.4',
+    defaultModel: configuredModel || models[0]?.id || 'default',
     canLogin: true,
     loginActionLabel: signedIn ? 'Switch ChatGPT account' : 'Sign in with ChatGPT',
     canLogout: signedIn,
@@ -629,10 +717,11 @@ async function inspectClaudeSlot(
   binaryPath: string | undefined,
   settings: AppSettings,
 ): Promise<AccountSlotStatus> {
+  const claudeEfforts: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
   const claudeModels: ModelOption[] = [
-    { id: 'sonnet', label: 'Claude Sonnet (Latest)', description: 'Balanced speed & intelligence', contextWindow: 200_000 },
-    { id: 'opus', label: 'Claude Opus (Latest)', description: 'Deepest complex reasoning', contextWindow: 200_000 },
-    { id: 'haiku', label: 'Claude Haiku (Fast)', description: 'Quick lightweight turns', contextWindow: 200_000 },
+    { id: 'sonnet', label: 'Claude Sonnet', description: 'Balanced speed & intelligence', contextWindow: 200_000, supportedEfforts: claudeEfforts },
+    { id: 'opus', label: 'Claude Opus', description: 'Deepest complex reasoning', contextWindow: 200_000, supportedEfforts: claudeEfforts },
+    { id: 'haiku', label: 'Claude Haiku', description: 'Quick lightweight turns', contextWindow: 200_000, supportedEfforts: claudeEfforts },
   ];
 
   const absHome = resolveSlotHomeAbs('claude', slot);

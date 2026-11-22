@@ -546,7 +546,7 @@ export async function runCliProviderMission(params: {
       : provider === 'codex'
         ? 'default'
         : cliEngine === 'gemini_cli'
-          ? 'gemini-2.5-flash'
+          ? 'gemini-3.8-flash'
           : 'gemini-3.8-flash');
 
   if (!binary || !slotStatus?.installed) {
@@ -1091,8 +1091,8 @@ async function runCodexCli(params: {
     low: 'low',
     medium: 'medium',
     high: 'high',
-    xhigh: 'high',
-    max: 'high',
+    xhigh: 'xhigh',
+    max: 'max',
   };
   args.push('-c', `model_reasoning_effort="${effortMap[settings.effort] || 'medium'}"`);
 

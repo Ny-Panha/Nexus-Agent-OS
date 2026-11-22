@@ -252,6 +252,8 @@ export interface ModelOption {
   description?: string;
   contextWindow?: number;
   effortVariants?: Partial<Record<EffortLevel, string>>;
+  /** Exact effort levels actually supported by this CLI + model. Empty/omitted = no effort selector shown. */
+  supportedEfforts?: EffortLevel[];
 }
 
 export interface ProviderAccountStatus {

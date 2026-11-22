@@ -378,11 +378,15 @@ export function Sidebar({
                 activeProvider?.signedIn ? 'bg-emerald-400' : 'bg-rose-400'
               }`}
             />
-            <span className="text-xs font-medium text-[var(--text-primary)] truncate">
+            <span className="text-xs font-medium text-[var(--text-primary)] shrink-0">
               {activeProvider?.shortName || 'Gemini'}
             </span>
             <span className="text-[11px] text-[var(--text-muted)] truncate">
-              {activeProvider?.profileHint || 'Account'}
+              {activeProvider?.activeSlotId && activeProvider.activeSlotId !== 'slot-1'
+                ? `Slot ${activeProvider.activeSlotId.replace('slot-', '')}`
+                : activeProvider?.id === 'gemini_agy'
+                  ? 'Antigravity'
+                  : activeProvider?.profileHint || 'Account'}
             </span>
           </span>
           <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">v2.0</span>

@@ -1,8 +1,21 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T04:58:00+07:00
+- **Last Session**: IDE — 2026-11-22T10:05:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Clean Provider-Specific UI, Real-Only Model Catalogs, and Zero Popover Clipping (`shared/types.ts`, `server/llm/providerRegistry.ts`, `server/llm/cliRunner.ts`, `src/components/ComposerBar.tsx`, `src/components/StudioSelect.tsx`, `src/components/SettingsModal.tsx`, `src/components/Sidebar.tsx`)**:
+    - **Real Models Only**:
+      - Codex (`codex`): loads real `visibility === 'list'` models + real `supportedEfforts` from `<codexHome>/models_cache.json` (`GPT-6.2 Astra`, `GPT-6.2 Sol`, `GPT-6.1 Terra`, etc.) — removed hardcoded fake `gpt-5.4` / `o3` / `o4-mini` and ugly `(Configured)` suffix; passes real `xhigh` and `max` to `codex exec`.
+      - Gemini Slot 1 (`agy`): sets exact per-model `supportedEfforts` from `agy.exe models` (`Gemini 3.8 Flash` / `Gemini 4 Argon` / `Claude 5.5` = 3 levels `Low/Medium/High`; `Gemini 4 Neon` / `Hydrogen` = 4 levels `Low/Medium/High/Extra High`; `Orchestrator` & `GPT-OSS 120B` = none).
+      - Gemini Slot 2 (`gemini_cli`): returns ONLY real models from `gemini --list-models` with clean display names (`Gemini 3.8 Flash`, `Gemini 3.1 Pro Preview`, `Gemini 3 Flash Preview`, `Gemini 3.5 Flash Lite`, `Gemini 2.5 Pro`, `Auto`), stopped injecting non-listed `gemini-2.5-flash`, and hides Effort picker because `gemini --help` has no `--effort` flag.
+    - **Honest Engine-Specific Effort UI**:
+      - Codex (`codex`): discrete blue horizontal slider matching the active model's exact `supportedEfforts` count + Reset button (**removed confusing fake ⚡ lightning icon**).
+      - Antigravity (`agy`) & Claude (`claude`): clean vertical **Thinking effort** list matching Antigravity's real UI with ONLY that model's exact supported levels (auto-clamps e.g. `Extra High` → `High` on 3-level `Gemini 3.8 Flash`).
+      - Hidden completely for engines/models with ≤ 1 effort (`gemini_cli`, `ollama`, API keys, `GPT-OSS 120B`, `Orchestrator`).
+    - **Fixed Popover Clipping & Ugly Native `<select>`**:
+      - Re-arranged Composer bottom strip cleanly (`Provider · Model · Effort` left-anchored opening right; `Safety · Context · Help` right-anchored opening left) so zero popovers clip against `<main className="overflow-hidden">` and controls stay on one crisp row.
+      - Replaced native Windows grey `<select>` in `Settings → Agents` with custom dark-glass `StudioSelect` component (`openUp` + `align="right"`).
+      - Cleaned Sidebar bottom account pill so provider name never squishes to `Ge...`.
   - **Fixed Gemini CLI Workspace Trust in Headless Subprocess (`server/llm/cliRunner.ts`, `server/llm/providerRegistry.ts`)**:
     - Official Gemini CLI v0.70.0 in automated/headless mode rejects untrusted directories with: `Gemini CLI is not running in a trusted directory. To proceed, either use '--skip-trust', set the 'GEMINI_CLI_TRUST_WORKSPACE=true' environment variable...`.
     - Verified via `gemini.cmd --help` that `--skip-trust` is an official documented flag (`Trust the current workspace for this session`).

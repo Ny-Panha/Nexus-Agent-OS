@@ -32,6 +32,7 @@ import {
 } from '../../shared/types';
 import { api } from '../lib/api';
 import { THEME_SWATCHES, t } from '../lib/i18n';
+import { StudioSelect } from './StudioSelect';
 
 export type SettingsSection =
   | 'general'
@@ -262,16 +263,16 @@ export function SettingsModal({
         if (agentId === 'orchestrator') {
           nextModel = slot?.defaultModel || provStatus?.defaultModel || 'default';
         } else {
-          const flash = slot?.models.find((m) => /flash/i.test(m.id));
+          const flash = slot?.models.find((m) => m.id === 'gemini-3.8-flash') || slot?.models.find((m) => /flash/i.test(m.id));
           nextModel =
             flash?.id ||
             slot?.defaultModel ||
-            (slot?.cliEngine === 'gemini_cli' ? 'gemini-2.5-flash' : 'gemini-3.8-flash');
+            'gemini-3.8-flash';
         }
       } else if (nextProvider === 'ollama') {
         nextModel = provStatus?.models[0]?.id || form.ollamaModel || 'qwen2.5:7b';
       } else if (nextProvider === 'gemini_api') {
-        nextModel = form.geminiModel || 'gemini-2.5-flash';
+        nextModel = form.geminiModel || 'gemini-3.8-flash';
       } else {
         nextModel = form.openaiModel || 'gpt-4o-mini';
       }
@@ -295,10 +296,11 @@ export function SettingsModal({
     const codexSlot1 = providers.find((p) => p.id === 'codex')?.slots?.[0];
     const gemSlot1 = providers.find((p) => p.id === 'gemini_agy')?.slots?.[0];
     const strongestCodex =
-      codexSlot1?.models.find((m) => m.id !== 'default')?.id ||
       codexSlot1?.defaultModel ||
-      'gpt-5.4';
+      codexSlot1?.models.find((m) => m.id !== 'default')?.id ||
+      'default';
     const flashGem =
+      gemSlot1?.models.find((m) => m.id === 'gemini-3.8-flash')?.id ||
       gemSlot1?.models.find((m) => /flash/i.test(m.id))?.id ||
       gemSlot1?.defaultModel ||
       'gemini-3.8-flash';
@@ -932,7 +934,7 @@ export function SettingsModal({
                 </div>
 
                 <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.07]">
-                  {AGENT_ROSTER.map((a) => {
+                  {AGENT_ROSTER.map((a, agentIdx) => {
                     const route = getAgentRoute(a.id);
                     const isCliProv =
                       route.provider === 'codex' ||
@@ -946,6 +948,46 @@ export function SettingsModal({
                       : route.provider === 'ollama'
                         ? provMeta?.models || []
                         : [];
+                    const openUp = agentIdx >= AGENT_ROSTER.length - 2;
+
+                    const providerOptions = [
+                      { value: 'codex', label: 'Codex (ChatGPT)', dot: (providers.find((p) => p.id === 'codex')?.slots?.some((s) => s.signedIn) ? 'emerald' : 'rose') as 'emerald' | 'rose' },
+                      { value: 'gemini_agy', label: 'Gemini (Google)', dot: (providers.find((p) => p.id === 'gemini_agy')?.slots?.some((s) => s.signedIn) ? 'emerald' : 'rose') as 'emerald' | 'rose' },
+                      { value: 'claude', label: 'Claude Code', dot: (providers.find((p) => p.id === 'claude')?.slots?.some((s) => s.signedIn) ? 'emerald' : 'rose') as 'emerald' | 'rose' },
+                      { value: 'ollama', label: 'Local AI (Ollama)', dot: (providers.find((p) => p.id === 'ollama')?.signedIn ? 'emerald' : 'amber') as 'emerald' | 'amber' },
+                      { value: 'gemini_api', label: 'Gemini API Key', sublabel: 'Fallback engine' },
+                      { value: 'openai_compatible', label: 'OpenAI-Compatible', sublabel: 'Fallback engine' },
+                    ];
+
+                    const slotOptions =
+                      slots.length > 0
+                        ? slots.map((s) => ({
+                            value: s.id,
+                            label: s.label,
+                            sublabel: s.signedIn ? `${s.models.length} models · Active` : 'Not signed in',
+                            dot: (s.signedIn ? 'emerald' : 'rose') as 'emerald' | 'rose',
+                          }))
+                        : [{ value: 'slot-1', label: 'Account 1 (Default)' }];
+
+                    const modelOptions =
+                      slotModels.length > 0
+                        ? [
+                            ...(!slotModels.some((m) => m.id === route.model) && route.model
+                              ? [{ value: route.model, label: route.model }]
+                              : []),
+                            ...slotModels.map((m) => ({
+                              value: m.id,
+                              label: m.label,
+                              sublabel: m.description,
+                            })),
+                          ]
+                        : [
+                            {
+                              value: route.model || 'default',
+                              label: route.model || 'default',
+                              sublabel: 'Sign in to load models',
+                            },
+                          ];
 
                     return (
                       <div key={a.id} className="p-4 space-y-3">
@@ -963,20 +1005,12 @@ export function SettingsModal({
                             <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
                               Provider
                             </label>
-                            <select
+                            <StudioSelect
                               value={route.provider}
-                              onChange={(e) =>
-                                updateAgentRoute(a.id, { provider: e.target.value as ProviderType })
-                              }
-                              className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                            >
-                              <option value="codex">Codex (ChatGPT CLI)</option>
-                              <option value="gemini_agy">Gemini (Google CLI)</option>
-                              <option value="claude">Claude Code (CLI)</option>
-                              <option value="ollama">Local AI (Ollama)</option>
-                              <option value="gemini_api">Gemini API Key (Fallback)</option>
-                              <option value="openai_compatible">OpenAI-Compatible (Fallback)</option>
-                            </select>
+                              options={providerOptions}
+                              openUp={openUp}
+                              onChange={(val) => updateAgentRoute(a.id, { provider: val as ProviderType })}
+                            />
                           </div>
 
                           {/* 2. Account Slot */}
@@ -985,21 +1019,12 @@ export function SettingsModal({
                               Account slot
                             </label>
                             {isCliProv ? (
-                              <select
+                              <StudioSelect
                                 value={route.slotId || 'slot-1'}
-                                onChange={(e) => updateAgentRoute(a.id, { slotId: e.target.value })}
-                                className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                              >
-                                {slots.length > 0 ? (
-                                  slots.map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.label} · {s.signedIn ? 'Active' : 'Not signed in'}
-                                    </option>
-                                  ))
-                                ) : (
-                                  <option value="slot-1">Account 1 (Default)</option>
-                                )}
-                              </select>
+                                options={slotOptions}
+                                openUp={openUp}
+                                onChange={(val) => updateAgentRoute(a.id, { slotId: val })}
+                              />
                             ) : (
                               <div className="h-8 px-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06] text-[11px] text-[var(--text-muted)] flex items-center">
                                 {route.provider === 'ollama' ? 'Local Ollama server' : 'API Key fallback'}
@@ -1013,28 +1038,13 @@ export function SettingsModal({
                               Model
                             </label>
                             {isCliProv || (route.provider === 'ollama' && slotModels.length > 0) ? (
-                              <select
+                              <StudioSelect
                                 value={route.model}
-                                onChange={(e) => updateAgentRoute(a.id, { model: e.target.value })}
-                                className="w-full h-8 px-2.5 rounded-lg bg-black/30 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
-                              >
-                                {slotModels.length > 0 ? (
-                                  <>
-                                    {!slotModels.some((m) => m.id === route.model) && route.model && (
-                                      <option value={route.model}>{route.model}</option>
-                                    )}
-                                    {slotModels.map((m) => (
-                                      <option key={m.id} value={m.id}>
-                                        {m.label}
-                                      </option>
-                                    ))}
-                                  </>
-                                ) : (
-                                  <option value={route.model || 'default'}>
-                                    {route.model || 'default'} (sign in to load models)
-                                  </option>
-                                )}
-                              </select>
+                                options={modelOptions}
+                                openUp={openUp}
+                                align="right"
+                                onChange={(val) => updateAgentRoute(a.id, { model: val })}
+                              />
                             ) : (
                               <input
                                 type="text"
@@ -1042,7 +1052,7 @@ export function SettingsModal({
                                 onChange={(e) => updateAgentRoute(a.id, { model: e.target.value })}
                                 placeholder={
                                   route.provider === 'gemini_api'
-                                    ? 'gemini-2.5-flash'
+                                    ? 'gemini-3.8-flash'
                                     : route.provider === 'ollama'
                                       ? 'qwen2.5:7b'
                                       : 'gpt-4o-mini'
