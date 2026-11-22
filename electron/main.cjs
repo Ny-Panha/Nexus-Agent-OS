@@ -188,10 +188,19 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('window-all-closed', () => {
+app.on('before-quit', () => {
   if (serverProcess) {
     serverProcess.kill();
     serverProcess = null;
   }
-  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    if (serverProcess) {
+      serverProcess.kill();
+      serverProcess = null;
+    }
+    app.quit();
+  }
 });

@@ -1,23 +1,29 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T14:30:00+07:00
+- **Last Session**: IDE (Codex Error Parsing & Research Routing Diagnosis) — 2026-11-22T14:56:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
-  - **Fixed Desktop App Launcher & Server Boot Race (`electron/start.cjs`, `electron/main.cjs`, `package.json`)**:
-    - Root cause: On Windows, `ELECTRON_RUN_AS_NODE` in the shell or spawning `electron.exe` with `ELECTRON_RUN_AS_NODE: '1'` caused Electron to start in Node mode or fail silently due to Windows GUI subsystem detachment, resulting in `Server did not respond at http://127.0.0.1:4310/api/health`.
-    - Added dedicated clean launcher `electron/start.cjs` that explicitly purges `ELECTRON_RUN_AS_NODE` from the environment before spawning Electron, ensuring Electron always launches as a pure desktop GUI application.
-    - In `electron/main.cjs`, embedded server now spawns `node.exe` directly as a true console subprocess with piped stdio and increased health check retries to 60 (15 seconds).
-    - Live verified: `npm run start:desktop` boots embedded server and responds HTTP 200 on `/api/health` in under 2 seconds.
-  - **Staged Sequential Team Delegation & Context Forwarding (`server/agents/orchestrator.ts`)**:
-    - Root cause: Orchestrator previously ran all delegated tasks simultaneously with `Promise.all` at line 605, causing System Agent to start before File Agent finished and reported its findings and confirmed project path.
-    - Replaced `Promise.all` with a staged sequential loop (`for (const del of parsedDelegation.delegations)`).
-    - Implemented automatic inter-agent context forwarding: accumulated specialist reports are forwarded to subsequent agents as `[Findings & Context from Previous Specialist Agent(s)]`, ensuring System Agent receives verified project path and findings before running verification commands.
-    - Live Agent Mesh and plan steps update progressively in dependency order.
-  - **Fixed Typo in `server/llm/cliRunner.ts:221`**:
-    - Corrected comment from duplicate `gemini-3.8-flash-high or gemini-3.8-flash-high` to `gemini-3.8-flash-high or gemini-3.8-flash-medium`.
+  - **Codex Usage Limit Hit & Error Event Parsing Fix (`server/llm/cliRunner.ts`, `server/agents/orchestrator.ts`)**:
+    - Root cause of `Codex execution failed.` on prompt `research agent work flow nh tx`:
+      1. User's OpenAI/Codex account hit usage limit (`You’ve hit your usage limit. Upgrade to Pro... or try again at Nov 24th, 2026 10:04 AM.`).
+      2. Codex CLI outputs JSON event `{"type":"error","message":"..."}` and `{"type":"turn.failed","error":{"message":"..."}}`.
+      3. In `server/llm/cliRunner.ts`, `onJsonEvent` only inspected `evType === 'item.completed'`, failing to capture top-level `type: 'error'` or `turn.failed`. As a result, `lastErrorText` was empty and defaulted to generic `'Codex execution failed.'`, bypassing quota classification and attention alert cards.
+    - Added explicit top-level error event handling in `runCodexCli` for `evType === 'error'` and `evType === 'turn.failed'`, plus fallback extraction from `rawStdout` JSON lines.
+    - Enhanced global error handler in `server/agents/orchestrator.ts` to classify unhandled CLI errors (`signed_out` or `quota_exceeded`) and emit an interactive `kind: 'needs_attention'` card with an actionable `Sign in / Switch Provider` button rather than a dead red error box.
+  - **Specialist Fallback Model Fix (`src/components/SettingsModal.tsx`)**:
+    - Fixed lines 273-279: when switching specialist agents (File, System, Browser) to another provider (Codex or Claude), fallback model now cleanly defaults to provider-appropriate fast models (`default` for Codex, `claude-3-5-haiku-20241022` for Claude) instead of hardcoding `gemini-3.8-flash`.
+  - **macOS Server Process Lifecycle Fix (`electron/main.cjs`)**:
+    - Fixed lines 191-197: on macOS (`darwin`), closing all windows keeps the embedded server alive for instant reactivation, and kills `serverProcess` only on `before-quit`.
   - **Verification**:
     - `npm run typecheck`: 0 errors.
     - `npm run build`: 0 errors.
+- **Active Environment**:
+  - Backend API: `http://localhost:4310`
+  - Vite Frontend: `http://localhost:5173`
+  - Electron Desktop Launcher: `electron/start.cjs`
+- **Next Steps / User Guidance for Research**:
+  - When conducting research, switch from single-agent Codex to **Nexus Team (`/auto`)** or **Browser Agent (`/browser`)** with Gemini (Slot 1 unlimited) or Claude.
+  - Built-in workflow `Web Research -> Desktop Note` (`/web-research`) in the Workflows modal automatically delegates web searches to Browser Agent and saves findings to Desktop via File Agent.
   - **Fixed File Agent Crash & Model Normalization (`server/llm/cliRunner.ts`, `server/store/storage.ts`, `src/components/SettingsModal.tsx`)**:
     - Root cause: `agy.exe models` only ships `Gemini 3.8 Flash (High/Medium/Low)`, `Claude Sonnet 4.6`, `Claude Opus 4.6`, and `GPT-OSS 120B`. When `gemini-4-hydrogen` was passed, Antigravity CLI exited with fatal code 1: `model gemini-4-hydrogen is not recognized`.
     - Added safe fallback in `resolveAgyModelVariant` so that any unsupported or unrecognized model ID transparently normalizes to `gemini-3.8-flash-medium` rather than passing the invalid slug to `agy.exe`. Unit verified with node test.

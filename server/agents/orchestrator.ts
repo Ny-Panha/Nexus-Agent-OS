@@ -23,7 +23,7 @@ import { systemTools } from '../tools/systemTools.js';
 import { browserTools } from '../tools/browserTools.js';
 import type { ToolSpec } from '../tools/types.js';
 import { generateWithTools, type LlmMessage } from '../llm/client.js';
-import { runCliProviderMission, type CliRunOutput } from '../llm/cliRunner.js';
+import { runCliProviderMission, type CliRunOutput, classifyCliError, mapProviderTitle } from '../llm/cliRunner.js';
 import type { PermissionGate } from '../security/permissions.js';
 import { appendAuditLog, DEFAULT_AGENT_ROUTES } from '../store/storage.js';
 
@@ -859,10 +859,24 @@ Write a clear, concise final answer for the user based on the specialist report(
       const isOllamaDown =
         primaryRoute.provider === 'ollama' && /fetch failed|ECONNREFUSED|not reachable|Ollama/i.test(errorMsg);
 
+      const isCliError = isCliAccountProvider(primaryRoute.provider);
+      const cliKind = isCliError ? classifyCliError(errorMsg) : 'error';
+      const isAttention = isOllamaDown || cliKind === 'signed_out' || cliKind === 'quota_exceeded';
+
+      if (isAttention) {
+        erroredAgents.add(responderAgent);
+        this.emit({
+          type: 'agent_state',
+          agent: responderAgent,
+          state: 'error',
+          detail: cliKind === 'quota_exceeded' ? 'Quota reached' : isOllamaDown ? 'Offline' : 'Needs sign-in',
+        });
+      }
+
       const failedMessage: ChatMessage = {
         id: randomUUID(),
         role: 'assistant',
-        kind: isOllamaDown ? 'needs_attention' : 'message',
+        kind: isAttention ? 'needs_attention' : 'message',
         agent: responderAgent,
         provider: primaryRoute.provider,
         slotId: primaryRoute.slotId,
@@ -871,7 +885,7 @@ Write a clear, concise final answer for the user based on the specialist report(
         content: isOllamaDown
           ? 'Local AI (Ollama) is not running right now. Start Ollama locally to chat offline for free.'
           : errorMsg,
-        error: isOllamaDown ? undefined : errorMsg,
+        error: isAttention ? undefined : errorMsg,
         actionCta: isOllamaDown
           ? {
               type: 'start_ollama',
@@ -879,7 +893,17 @@ Write a clear, concise final answer for the user based on the specialist report(
               agent: responderAgent,
               label: 'Start Local AI (Ollama)',
             }
-          : undefined,
+          : isAttention
+            ? {
+                type: 'login',
+                provider: primaryRoute.provider as CliAccountProvider,
+                slotId: primaryRoute.slotId,
+                slotLabel: primarySlotLabel,
+                agent: responderAgent,
+                reason: cliKind as 'signed_out' | 'quota_exceeded',
+                label: `Sign in / Switch ${mapProviderTitle(primaryRoute.provider)} (${primarySlotLabel || primaryRoute.slotId})`,
+              }
+            : undefined,
         createdAt: new Date().toISOString(),
         plan: artifacts.plan.length ? artifacts.plan : undefined,
         handoffs: artifacts.handoffs.length ? artifacts.handoffs : undefined,

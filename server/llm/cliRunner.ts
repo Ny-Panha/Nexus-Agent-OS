@@ -113,7 +113,7 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function mapProviderTitle(provider: ProviderType): string {
+export function mapProviderTitle(provider: ProviderType): string {
   if (provider === 'claude') return 'Claude Code';
   if (provider === 'codex') return 'Codex (ChatGPT)';
   if (provider === 'gemini_agy') return 'Gemini';
@@ -121,7 +121,7 @@ function mapProviderTitle(provider: ProviderType): string {
   return provider;
 }
 
-function classifyCliError(errMsg: string): 'signed_out' | 'quota_exceeded' | 'error' {
+export function classifyCliError(errMsg: string): 'signed_out' | 'quota_exceeded' | 'error' {
   if (
     /not logged in|please set an auth method|sign in|login required|unauthorized|unauthenticated|invalid_grant|code["':\s]+41\b/i.test(
       errMsg,
@@ -1159,6 +1159,18 @@ async function runCodexCli(params: {
       const evType = String(ev.type || '');
       const item = ev.item as Record<string, unknown> | undefined;
 
+      // Handle top-level errors emitted directly by Codex CLI (e.g. usage limit reached, auth error)
+      if (evType === 'error' && typeof ev.message === 'string') {
+        if (!/Under-development features enabled/i.test(ev.message)) {
+          lastErrorText = ev.message;
+        }
+      } else if (evType === 'turn.failed') {
+        const errObj = ev.error as Record<string, unknown> | undefined;
+        if (errObj && typeof errObj.message === 'string') {
+          lastErrorText = errObj.message;
+        }
+      }
+
       if (evType === 'item.completed' && item) {
         const itemType = String(item.type || '');
         if (itemType === 'agent_message' && typeof item.text === 'string') {
@@ -1212,7 +1224,28 @@ async function runCodexCli(params: {
 
   const text = agentMessages.join('\n\n').trim();
   if (!text && (res.exitCode !== 0 || lastErrorText)) {
-    const errMsg = lastErrorText || res.rawStderr || 'Codex execution failed.';
+    let errMsg = lastErrorText || res.rawStderr?.trim();
+    if (!errMsg && res.rawStdout) {
+      for (const line of res.rawStdout.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('{')) continue;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.type === 'error' && typeof parsed.message === 'string' && !/Under-development/i.test(parsed.message)) {
+            errMsg = parsed.message;
+            break;
+          }
+          if (parsed.type === 'turn.failed' && typeof parsed.error?.message === 'string') {
+            errMsg = parsed.error.message;
+            break;
+          }
+        } catch {
+          // ignore malformed json
+        }
+      }
+    }
+    if (!errMsg) errMsg = 'Codex execution failed.';
+
     const kind = classifyCliError(errMsg);
     if (kind === 'signed_out' || kind === 'quota_exceeded') {
       return buildSlotAttention({

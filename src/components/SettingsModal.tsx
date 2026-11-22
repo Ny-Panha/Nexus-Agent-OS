@@ -271,11 +271,12 @@ export function SettingsModal({
         if (agentId === 'orchestrator') {
           nextModel = slot?.defaultModel || provStatus?.defaultModel || 'default';
         } else {
-          const flash = slot?.models.find((m) => m.id === 'gemini-3.8-flash') || slot?.models.find((m) => /flash/i.test(m.id));
-          nextModel =
-            flash?.id ||
+          const fastModel =
+            slot?.models.find((m) => /flash|mini|haiku|instant/i.test(m.id))?.id ||
             slot?.defaultModel ||
-            'gemini-3.8-flash';
+            provStatus?.defaultModel ||
+            (nextProvider === 'codex' ? 'default' : nextProvider === 'claude' ? 'claude-3-5-haiku-20241022' : 'gemini-3.8-flash');
+          nextModel = fastModel;
         }
       } else if (nextProvider === 'ollama') {
         nextModel = provStatus?.models[0]?.id || form.ollamaModel || 'qwen2.5:7b';
