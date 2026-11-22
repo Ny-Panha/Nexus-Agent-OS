@@ -213,11 +213,19 @@ export function resolveAgyModelVariant(
     }
   }
 
-  if (suffixRe.test(selectedModel)) {
-    return { modelId: selectedModel, passEffortFlag: false };
+  if (matched) {
+    return { modelId: matched.id, passEffortFlag: false };
   }
 
-  return { modelId: matched?.id || selectedModel || 'gemini-3.8-flash-medium', passEffortFlag: false };
+  // Safe Fallback: If requested model (e.g. "gemini-4-hydrogen") is not in agy.exe models,
+  // pick the best verified model (gemini-3.8-flash-high or gemini-3.8-flash-medium) to prevent CLI crash!
+  const safeFallback =
+    models.find((m) => m.id.includes('3.8-flash'))?.effortVariants?.medium ||
+    models.find((m) => m.id.includes('3.8-flash'))?.id ||
+    models[0]?.id ||
+    'gemini-3.8-flash-medium';
+
+  return { modelId: safeFallback, passEffortFlag: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -630,7 +638,7 @@ export async function runCliProviderMission(params: {
   });
 
   if (cliEngine === 'gemini_cli') {
-    return runGeminiCli({
+    const out = await runGeminiCli({
       binary,
       workspace,
       fullPrompt,
@@ -646,6 +654,35 @@ export async function runCliProviderMission(params: {
       emit,
       signal,
     });
+    // Auto-fallback: If official Gemini CLI hits free-tier quota (e.g. 20 req/day on 3.8-flash),
+    // transparently fallback to available gemini-2.5-flash so the user's workflow never breaks.
+    if (out.needsAttention?.reason === 'quota_exceeded' && selectedModel !== 'gemini-2.5-flash') {
+      try {
+        const fallbackOut = await runGeminiCli({
+          binary,
+          workspace,
+          fullPrompt,
+          model: 'gemini-2.5-flash',
+          slotConfig,
+          env,
+          settings,
+          planningOnly,
+          streamToChat,
+          sessionId: session.id,
+          activeAgent,
+          toolTraces,
+          emit,
+          signal,
+        });
+        if (!fallbackOut.needsAttention) {
+          fallbackOut.modelUsed = 'gemini-2.5-flash (Auto-fallback from quota-limited ' + selectedModel + ')';
+          return fallbackOut;
+        }
+      } catch {
+        // Fallback failed, return original attention
+      }
+    }
+    return out;
   }
 
   if (cliEngine === 'codex') {

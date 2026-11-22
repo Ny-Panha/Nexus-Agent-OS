@@ -1,8 +1,22 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T10:35:00+07:00
+- **Last Session**: IDE — 2026-11-22T11:15:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Fixed File Agent Crash & Model Normalization (`server/llm/cliRunner.ts`, `server/store/storage.ts`, `src/components/SettingsModal.tsx`)**:
+    - Root cause: `agy.exe models` only ships `Gemini 3.8 Flash (High/Medium/Low)`, `Claude Sonnet 4.6`, `Claude Opus 4.6`, and `GPT-OSS 120B`. When `gemini-4-hydrogen` was passed, Antigravity CLI exited with fatal code 1: `model gemini-4-hydrogen is not recognized`.
+    - Added safe fallback in `resolveAgyModelVariant` so that any unsupported or unrecognized model ID transparently normalizes to `gemini-3.8-flash-medium` rather than passing the invalid slug to `agy.exe`. Unit verified with node test.
+    - Updated `normalizeAgentRoutes` to sanitize legacy `gemini-4-*` slugs to `gemini-3.8-flash`.
+    - Filtered out broken `gemini-4-*` entries from `SettingsModal.tsx`.
+  - **Resolved System Agent Quota 429 & Automatic Fallback (`server/llm/cliRunner.ts`, `.nexus-data/settings.json`)**:
+    - Root cause: Gemini CLI Slot 2 was configured with a Google AI Studio Free Tier key capped at 20 requests/day on `gemini-3.8-flash` and returned HTTP 429 Quota Exceeded. Slot 1 (`Account 1 (Default · Antigravity)`) has full unlimited access to `gemini-3.8-flash`.
+    - Re-routed default File, System, and Browser specialist agents to `Account 1 (Default · Antigravity)` with `gemini-3.8-flash`.
+    - Implemented transparent automatic fallback in `runCliAgent` for Gemini CLI: if `gemini-3.8-flash` hits quota 429, it automatically retries with `gemini-2.5-flash` so the task completes without breaking.
+  - **Verification**:
+    - `npm run typecheck`: 0 errors.
+    - `npm run build`: 0 errors.
+    - `agy.exe --model gemini-3.8-flash`: succeeded with code 0.
+    - `gemini.cmd -m gemini-2.5-flash`: succeeded with code 0.
   - **Editable Workflows & Production-Grade Prompts (`shared/types.ts`, `server/store/storage.ts`, `server/index.ts`, `src/lib/api.ts`, `src/components/SettingsModal.tsx`)**:
     - Built-in and custom workflows now support in-line editing (`Edit` button) directly inside `Settings → Workflows`.
     - User edits to built-in presets are persisted cleanly to `.nexus-data/preset-overrides.json` without modifying code files, and can be restored anytime with a single click on `Reset` (`↺`).

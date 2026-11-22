@@ -1047,10 +1047,11 @@ export function SettingsModal({
                           }))
                         : [{ value: 'slot-1', label: 'Account 1 (Default)' }];
 
+                    const isKnownBroken = route.model ? /gemini-4-/i.test(route.model) : false;
                     const modelOptions =
                       slotModels.length > 0
                         ? [
-                            ...(!slotModels.some((m) => m.id === route.model) && route.model
+                            ...(!slotModels.some((m) => m.id === route.model) && route.model && !isKnownBroken
                               ? [{ value: route.model, label: route.model }]
                               : []),
                             ...slotModels.map((m) => ({

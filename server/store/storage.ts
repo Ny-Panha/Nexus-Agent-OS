@@ -388,11 +388,16 @@ function normalizeAgentRoutes(
       slotId = undefined;
     }
 
-    const fallbackModel =
+    let fallbackModel =
       raw?.model ||
       (agent === 'orchestrator' && provider === 'codex'
         ? selectedModels?.codex || 'default'
         : base.model);
+
+    // Sanitize non-existent models on Antigravity Slot 1 (e.g. gemini-4-*) to prevent CLI crashes
+    if (provider === 'gemini_agy' && slotId === 'slot-1' && (/gemini-4-/i.test(fallbackModel) || fallbackModel === 'default')) {
+      fallbackModel = 'gemini-3.8-flash';
+    }
 
     out[agent] = {
       provider,
