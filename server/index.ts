@@ -24,9 +24,11 @@ import {
   loadPresets,
   loadSessions,
   loadSettings,
+  resetBuiltinPreset,
   saveCustomPreset,
   saveSettings,
   togglePinMessage,
+  updatePreset,
   updateSession,
 } from './store/storage.js';
 import { PermissionGate } from './security/permissions.js';
@@ -409,6 +411,37 @@ app.post('/api/presets', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid preset' });
   }
+});
+
+app.put('/api/presets/:id', async (req, res) => {
+  try {
+    const schema = z.object({
+      name: z.string().min(2).max(80).optional(),
+      khmerLabel: z.string().max(100).optional(),
+      description: z.string().max(260).optional(),
+      target: z.enum(['auto', 'orchestrator', 'file', 'system', 'browser']).optional(),
+      prompt: z.string().min(3).max(6000).optional(),
+      agentsInvolved: z.array(z.enum(['orchestrator', 'file', 'system', 'browser'])).min(1).optional(),
+    });
+    const patch = schema.parse(req.body);
+    const preset = await updatePreset(req.params.id, patch);
+    if (!preset) {
+      res.status(404).json({ error: 'Workflow not found' });
+      return;
+    }
+    res.json({ preset });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid workflow update' });
+  }
+});
+
+app.post('/api/presets/:id/reset', async (req, res) => {
+  const preset = await resetBuiltinPreset(req.params.id);
+  if (!preset) {
+    res.status(404).json({ error: 'Only built-in workflows can be reset' });
+    return;
+  }
+  res.json({ preset });
 });
 
 app.delete('/api/presets/:id', async (req, res) => {

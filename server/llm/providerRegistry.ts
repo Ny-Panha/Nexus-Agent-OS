@@ -373,14 +373,23 @@ async function inspectAgySlot(
 }
 
 const GEMINI_CLI_FALLBACK_MODELS: ModelOption[] = [
-  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Gemini CLI', contextWindow: 1_048_576 },
-  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: 'Gemini CLI', contextWindow: 1_048_576 },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Gemini CLI', contextWindow: 1_048_576 },
-  { id: 'auto', label: 'Auto', description: 'Let Gemini CLI choose', contextWindow: 1_048_576 },
+  { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash', description: 'Recommended · fast & multimodal', contextWindow: 1_048_576 },
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', description: 'Complex reasoning & tool calling', contextWindow: 1_048_576 },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', description: 'Next-gen flash preview', contextWindow: 1_048_576 },
+  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', description: 'Deep coding & context', contextWindow: 1_048_576 },
+  { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite', description: 'Lightweight & low latency', contextWindow: 1_048_576 },
+  { id: 'auto', label: 'Auto (Best for task)', description: 'Automatic routing based on prompt', contextWindow: 1_048_576 },
 ];
 
 function formatGeminiCliModelLabel(id: string, rawLabel: string): string {
-  if (id.toLowerCase() === 'auto') return 'Auto';
+  const norm = id.toLowerCase();
+  if (norm === 'auto') return 'Auto (Best for task)';
+  if (norm.includes('3.8-flash')) return 'Gemini 3.8 Flash';
+  if (norm.includes('3.1-pro')) return 'Gemini 3.1 Pro Preview';
+  if (norm.includes('3-flash')) return 'Gemini 3 Flash Preview';
+  if (norm.includes('3.5-flash-lite')) return 'Gemini 3.5 Flash Lite';
+  if (norm.includes('2.5-pro')) return 'Gemini 2.5 Pro';
+  if (norm.includes('2.5-flash')) return 'Gemini 2.5 Flash';
   const base = rawLabel && rawLabel !== id ? rawLabel : id;
   return base
     .replace(/-customtools$/i, '')
@@ -390,6 +399,18 @@ function formatGeminiCliModelLabel(id: string, rawLabel: string): string {
       return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
     })
     .join(' ');
+}
+
+function getGeminiCliModelDesc(id: string): string {
+  const norm = id.toLowerCase();
+  if (norm === 'auto') return 'Automatic routing based on prompt';
+  if (norm.includes('3.8-flash')) return 'Recommended · fast & multimodal';
+  if (norm.includes('3.1-pro')) return 'Complex reasoning & tool calling';
+  if (norm.includes('3-flash')) return 'Next-gen flash preview';
+  if (norm.includes('3.5-flash-lite')) return 'Lightweight & low latency';
+  if (norm.includes('2.5-pro')) return 'Deep coding & context';
+  if (norm.includes('2.5-flash')) return 'Fast legacy generation';
+  return 'Official Gemini CLI';
 }
 
 async function inspectGeminiCliSlot(
@@ -481,11 +502,13 @@ async function inspectGeminiCliSlot(
       if (m) {
         const id = m[1].trim();
         const rawLabel = m[2].trim();
-        if (!parsedModels.some((x) => x.id === id)) {
+        const cleanLabel = formatGeminiCliModelLabel(id, rawLabel);
+        // Avoid duplicate models (like customtools variant when base is already parsed)
+        if (!parsedModels.some((x) => x.id === id || x.label === cleanLabel)) {
           parsedModels.push({
             id,
-            label: formatGeminiCliModelLabel(id, rawLabel),
-            description: id === 'auto' ? 'Automatic model routing' : id,
+            label: cleanLabel,
+            description: getGeminiCliModelDesc(id),
             contextWindow: 1_048_576,
           });
         }
@@ -839,7 +862,7 @@ async function inspectGeminiProvider(settings: AppSettings): Promise<ProviderAcc
     id: 'gemini_agy',
     name: 'Gemini',
     shortName: 'Gemini',
-    subtitle: 'Google accounts via Antigravity (Slot 1) & official Gemini CLI (Slot 2+)',
+    subtitle: 'Antigravity (Slot 1) & official Gemini CLI (Slot 2+)',
     installed: anyInstalled,
     signedIn: Boolean(activeSlot?.signedIn),
     binaryPath: activeSlot?.binaryPath || agyBin || geminiCliBin,
@@ -869,7 +892,7 @@ async function inspectCodexProvider(settings: AppSettings): Promise<ProviderAcco
     id: 'codex',
     name: 'Codex',
     shortName: 'Codex',
-    subtitle: 'Your ChatGPT plan (isolated CODEX_HOME per account slot)',
+    subtitle: 'Official ChatGPT plan via Codex CLI',
     installed: Boolean(binaryPath),
     signedIn: Boolean(activeSlot?.signedIn),
     binaryPath,
@@ -899,7 +922,7 @@ async function inspectClaudeProvider(settings: AppSettings): Promise<ProviderAcc
     id: 'claude',
     name: 'Claude Code',
     shortName: 'Claude',
-    subtitle: 'Your Claude plan (isolated CLAUDE_CONFIG_DIR per account slot)',
+    subtitle: 'Official Claude plan via Claude Code CLI',
     installed: Boolean(binaryPath),
     signedIn: Boolean(activeSlot?.signedIn),
     binaryPath,
@@ -924,7 +947,7 @@ async function inspectOllamaProvider(settings: AppSettings): Promise<ProviderAcc
       id: 'ollama',
       name: 'Local AI',
       shortName: 'Local AI',
-      subtitle: 'A model on this computer: free and private, no account needed',
+      subtitle: 'Free & private models running on your laptop',
       installed: Boolean(binaryPath),
       signedIn: false,
       binaryPath,

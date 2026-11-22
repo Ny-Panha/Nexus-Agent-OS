@@ -16,6 +16,10 @@ import {
   Trash2,
   Loader2,
   ExternalLink,
+  Pencil,
+  RotateCcw,
+  Check,
+  FileText,
 } from 'lucide-react';
 import {
   AGENT_ROSTER,
@@ -80,11 +84,15 @@ export function SettingsModal({
   const [notice, setNotice] = useState<string | null>(null);
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
 
-  // Workflow creator form
+  // Workflow editor form (create + edit)
+  const [wfEditingId, setWfEditingId] = useState<string | null>(null);
   const [wfName, setWfName] = useState('');
   const [wfKhmer, setWfKhmer] = useState('');
   const [wfPrompt, setWfPrompt] = useState('');
+  const [wfTarget, setWfTarget] = useState<WorkflowPreset['target']>('auto');
   const [wfAgents, setWfAgents] = useState<AgentId[]>(['orchestrator', 'file', 'system']);
+  const [wfBusy, setWfBusy] = useState(false);
+  const [wfError, setWfError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -323,19 +331,89 @@ export function SettingsModal({
     if (picked) setForm((prev) => ({ ...prev, defaultWorkspace: picked }));
   };
 
-  const handleCreatePreset = async () => {
-    if (!wfName.trim() || !wfPrompt.trim()) return;
-    await api.createPreset({
-      name: wfName.trim(),
-      khmerLabel: wfKhmer.trim(),
-      description: wfPrompt.trim().slice(0, 140),
-      target: 'auto',
-      prompt: wfPrompt.trim(),
-      agentsInvolved: wfAgents.length ? wfAgents : ['orchestrator'],
-    });
+  const resetWorkflowForm = () => {
+    setWfEditingId(null);
     setWfName('');
     setWfKhmer('');
     setWfPrompt('');
+    setWfTarget('auto');
+    setWfAgents(['orchestrator', 'file', 'system']);
+    setWfError(null);
+  };
+
+  const handleEditPreset = (p: WorkflowPreset) => {
+    setWfEditingId(p.id);
+    setWfName(p.name);
+    setWfKhmer(p.khmerLabel || '');
+    setWfPrompt(p.prompt);
+    setWfTarget(p.target);
+    setWfAgents(p.agentsInvolved.length ? p.agentsInvolved : ['orchestrator']);
+    setWfError(null);
+  };
+
+  const handleInsertWorkflowTemplate = () => {
+    setWfPrompt(
+      [
+        'Goal: ...',
+        '',
+        'Steps:',
+        '1. File Agent: ...',
+        '2. System Agent: ...',
+        '',
+        'Rules:',
+        '- កុំលុប ឬ edit file មុនសួរខ្ញុំ។',
+        '',
+        'Output (Khmer + English technical terms):',
+        '- ...',
+      ].join('\n'),
+    );
+  };
+
+  const handleSavePreset = async () => {
+    const name = wfName.trim();
+    const prompt = wfPrompt.trim();
+    if (name.length < 2 || prompt.length < 3) {
+      setWfError('Name (≥ 2 chars) and instructions are required.');
+      return;
+    }
+    setWfBusy(true);
+    setWfError(null);
+    const firstLine = prompt.split(/\r?\n/).find((l) => l.trim())?.trim() || prompt;
+    const payload = {
+      name,
+      khmerLabel: wfKhmer.trim(),
+      description: firstLine.replace(/^Goal:\s*/i, '').slice(0, 140),
+      target: wfTarget,
+      prompt,
+      agentsInvolved: wfAgents.length ? wfAgents : (['orchestrator'] as AgentId[]),
+    };
+    try {
+      if (wfEditingId) {
+        await api.updatePreset(wfEditingId, payload);
+        setNotice(`Workflow "${name}" updated.`);
+      } else {
+        await api.createPreset(payload);
+        setNotice(`Workflow "${name}" added.`);
+      }
+      resetWorkflowForm();
+      onPresetsChanged();
+    } catch (err) {
+      setWfError(err instanceof Error ? err.message : 'Failed to save workflow.');
+    } finally {
+      setWfBusy(false);
+    }
+  };
+
+  const handleResetPreset = async (p: WorkflowPreset) => {
+    await api.resetPreset(p.id);
+    if (wfEditingId === p.id) resetWorkflowForm();
+    setNotice(`"${p.name}" restored to the default prompt.`);
+    onPresetsChanged();
+  };
+
+  const handleDeletePreset = async (p: WorkflowPreset) => {
+    await api.deletePreset(p.id);
+    if (wfEditingId === p.id) resetWorkflowForm();
     onPresetsChanged();
   };
 
@@ -978,7 +1056,12 @@ export function SettingsModal({
                             ...slotModels.map((m) => ({
                               value: m.id,
                               label: m.label,
-                              sublabel: m.description,
+                              sublabel:
+                                m.description &&
+                                m.description !== m.id &&
+                                m.description !== m.label
+                                  ? m.description
+                                  : undefined,
                             })),
                           ]
                         : [
@@ -1181,91 +1264,222 @@ export function SettingsModal({
               </div>
             )}
 
-            {/* SECTION: WORKFLOWS */}
+            {/* SECTION: WORKFLOWS (create / edit / reset) */}
             {section === 'workflows' && (
               <div className="space-y-4">
-                <div className="rounded-xl border border-white/[0.08] p-4 space-y-3">
-                  <div className="text-xs font-semibold text-[var(--text-primary)]">New Reusable Workflow</div>
+                {/* Editor Card */}
+                <div
+                  className={`rounded-xl border p-4 space-y-3 transition-colors ${
+                    wfEditingId ? 'border-[var(--accent)]/60 bg-[var(--accent-soft)]/30' : 'border-white/[0.08]'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-[var(--text-primary)]">
+                      {wfEditingId ? `Edit workflow · ${wfName || 'Untitled'}` : 'New workflow'}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleInsertWorkflowTemplate}
+                        className="h-7 px-2.5 rounded-lg border border-white/[0.1] hover:bg-white/[0.06] text-[11px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <FileText className="w-3 h-3" />
+                        <span>Use template</span>
+                      </button>
+                      {wfEditingId && (
+                        <button
+                          type="button"
+                          onClick={resetWorkflowForm}
+                          className="h-7 px-2.5 rounded-lg border border-white/[0.1] hover:bg-white/[0.06] text-[11px] text-[var(--text-secondary)] cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-2">
                     <input
                       type="text"
                       value={wfName}
                       onChange={(e) => setWfName(e.target.value)}
-                      placeholder="Workflow name"
-                      className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none"
+                      placeholder="Workflow name (e.g. Debug Project)"
+                      className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                     />
                     <input
                       type="text"
                       value={wfKhmer}
                       onChange={(e) => setWfKhmer(e.target.value)}
                       placeholder="Khmer subtitle (optional)"
-                      className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none"
+                      className="px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
                     />
                   </div>
-                  <textarea
-                    rows={3}
-                    value={wfPrompt}
-                    onChange={(e) => setWfPrompt(e.target.value)}
-                    placeholder="Instructions for the agents..."
-                    className="w-full px-3 py-2 rounded-lg bg-black/25 border border-white/[0.1] text-xs text-[var(--text-primary)] outline-none resize-none"
-                  />
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex gap-1.5">
-                      {(['orchestrator', 'file', 'system', 'browser'] as AgentId[]).map((id) => (
-                        <button
-                          key={id}
-                          type="button"
-                          onClick={() =>
-                            setWfAgents((prev) =>
-                              prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-                            )
-                          }
-                          className={`px-2 py-1 rounded-lg text-[11px] border cursor-pointer ${
-                            wfAgents.includes(id)
-                              ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                              : 'border-white/[0.08] text-[var(--text-muted)]'
-                          }`}
-                        >
-                          {id}
-                        </button>
-                      ))}
+
+                  <div className="relative">
+                    <textarea
+                      rows={8}
+                      value={wfPrompt}
+                      onChange={(e) => setWfPrompt(e.target.value)}
+                      placeholder={'Goal: ...\n\nSteps:\n1. File Agent: ...\n2. System Agent: ...\n\nRules:\n- ...\n\nOutput: ...'}
+                      className="w-full px-3 py-2.5 rounded-lg bg-black/25 border border-white/[0.1] text-xs leading-relaxed font-mono text-[var(--text-primary)] outline-none resize-y min-h-[140px] focus:border-[var(--accent)]"
+                    />
+                    <span className="absolute right-2.5 bottom-2 text-[10px] text-[var(--text-muted)] tabular-nums pointer-events-none">
+                      {wfPrompt.length}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-3 items-start">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                        Send to
+                      </label>
+                      <StudioSelect
+                        value={wfTarget}
+                        openUp
+                        options={[
+                          { value: 'auto', label: 'Nexus team (auto)', sublabel: 'Orchestrator delegates' },
+                          { value: 'file', label: 'File Agent only' },
+                          { value: 'system', label: 'System Agent only' },
+                          { value: 'browser', label: 'Browser Agent only' },
+                        ]}
+                        onChange={(val) => setWfTarget(val as WorkflowPreset['target'])}
+                      />
                     </div>
+                    <div className="space-y-1">
+                      <label className="block text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                        Agents involved
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {AGENT_ROSTER.map((ag) => {
+                          const on = wfAgents.includes(ag.id);
+                          return (
+                            <button
+                              key={ag.id}
+                              type="button"
+                              onClick={() =>
+                                setWfAgents((prev) =>
+                                  prev.includes(ag.id) ? prev.filter((x) => x !== ag.id) : [...prev, ag.id],
+                                )
+                              }
+                              className={`h-7 px-2.5 rounded-lg text-[11px] border inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                                on
+                                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+                                  : 'border-white/[0.08] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                              }`}
+                            >
+                              {on && <Check className="w-3 h-3" />}
+                              <span>{ag.name}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {wfError && <div className="text-[11px] text-rose-300">{wfError}</div>}
+
+                  <div className="flex justify-end">
                     <button
                       type="button"
-                      onClick={() => void handleCreatePreset()}
-                      disabled={!wfName.trim() || !wfPrompt.trim()}
-                      className="h-8 px-3 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                      onClick={() => void handleSavePreset()}
+                      disabled={wfBusy || wfName.trim().length < 2 || wfPrompt.trim().length < 3}
+                      className="h-8 px-3.5 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                       style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-fg)' }}
                     >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add</span>
+                      {wfBusy ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : wfEditingId ? (
+                        <Check className="w-3.5 h-3.5" />
+                      ) : (
+                        <Plus className="w-3.5 h-3.5" />
+                      )}
+                      <span>{wfEditingId ? 'Save changes' : 'Add workflow'}</span>
                     </button>
                   </div>
                 </div>
 
+                {/* Workflow List */}
                 <div className="rounded-xl border border-white/[0.08] divide-y divide-white/[0.06]">
-                  {presets.map((p) => (
-                    <div key={p.id} className="px-4 py-3 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-xs font-medium text-[var(--text-primary)]">
-                          {p.name} {p.builtIn && <span className="text-[10px] text-[var(--text-muted)]">(Built-in)</span>}
+                  {presets.map((p) => {
+                    const isEditing = wfEditingId === p.id;
+                    return (
+                      <div
+                        key={p.id}
+                        className={`group px-4 py-3 flex items-start justify-between gap-3 transition-colors ${
+                          isEditing ? 'bg-[var(--accent-soft)]/40' : 'hover:bg-white/[0.02]'
+                        }`}
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-semibold text-[var(--text-primary)]">{p.name}</span>
+                            <span
+                              className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                !p.builtIn
+                                  ? 'bg-emerald-500/15 text-emerald-300'
+                                  : p.edited
+                                    ? 'bg-amber-500/15 text-amber-300'
+                                    : 'bg-white/[0.06] text-[var(--text-muted)]'
+                              }`}
+                            >
+                              {!p.builtIn ? 'Custom' : p.edited ? 'Edited' : 'Built-in'}
+                            </span>
+                          </div>
+                          {p.khmerLabel && (
+                            <div className="text-[11px] text-[var(--text-secondary)] truncate">{p.khmerLabel}</div>
+                          )}
+                          <div className="text-[11px] text-[var(--text-muted)] line-clamp-2 leading-relaxed">
+                            {p.description || p.prompt}
+                          </div>
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {p.agentsInvolved.map((id) => (
+                              <span
+                                key={id}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.05] text-[var(--text-muted)]"
+                              >
+                                {AGENT_ROSTER.find((a) => a.id === id)?.name || id}
+                              </span>
+                            ))}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">{p.prompt}</div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleEditPreset(p)}
+                            title="Edit workflow"
+                            className={`h-7 px-2 rounded-lg text-[11px] inline-flex items-center gap-1 border cursor-pointer transition-colors ${
+                              isEditing
+                                ? 'border-[var(--accent)] text-[var(--accent)]'
+                                : 'border-white/[0.08] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-white/[0.05]'
+                            }`}
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                          {p.builtIn && p.edited && (
+                            <button
+                              type="button"
+                              onClick={() => void handleResetPreset(p)}
+                              title="Reset to default prompt"
+                              className="h-7 w-7 rounded-lg border border-white/[0.08] text-[var(--text-muted)] hover:text-amber-300 hover:bg-amber-500/10 inline-flex items-center justify-center cursor-pointer"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                          )}
+                          {!p.builtIn && (
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePreset(p)}
+                              title="Delete workflow"
+                              className="h-7 w-7 rounded-lg border border-white/[0.08] text-[var(--text-muted)] hover:text-rose-300 hover:bg-rose-500/15 inline-flex items-center justify-center cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      {!p.builtIn && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await api.deletePreset(p.id);
-                            onPresetsChanged();
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-rose-500/20 text-[var(--text-muted)] hover:text-rose-300 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

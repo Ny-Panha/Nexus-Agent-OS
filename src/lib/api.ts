@@ -143,6 +143,13 @@ export const api = {
       body: JSON.stringify(preset),
     }),
   deletePreset: (id: string) => request<{ ok: boolean }>(`/api/presets/${id}`, { method: 'DELETE' }),
+  updatePreset: (id: string, patch: Partial<Omit<WorkflowPreset, 'id' | 'builtIn' | 'edited'>>) =>
+    request<{ preset: WorkflowPreset }>(`/api/presets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  resetPreset: (id: string) =>
+    request<{ preset: WorkflowPreset }>(`/api/presets/${id}/reset`, { method: 'POST' }),
   runMission: (payload: { sessionId?: string; prompt: string; target: TargetMode }) =>
     request<{ accepted: boolean; sessionId: string; userMessage: ChatMessage }>('/api/chat/run', {
       method: 'POST',

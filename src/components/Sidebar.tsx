@@ -386,7 +386,9 @@ export function Sidebar({
                 ? `Slot ${activeProvider.activeSlotId.replace('slot-', '')}`
                 : activeProvider?.id === 'gemini_agy'
                   ? 'Antigravity'
-                  : activeProvider?.profileHint || 'Account'}
+                  : activeProvider?.accountLabel
+                    ? activeProvider.accountLabel.split('@')[0]
+                    : 'Account 1'}
             </span>
           </span>
           <span className="text-[10px] font-mono text-[var(--text-muted)] shrink-0">v2.0</span>

@@ -65,8 +65,8 @@ function clampEffortToSupported(requested: EffortLevel, supported: EffortLevel[]
 }
 
 function shortProviderSubtitle(p: ProviderAccountStatus): string {
-  if (p.id === 'codex') return p.accountLabel || 'ChatGPT Codex CLI';
-  if (p.id === 'claude') return p.accountLabel || 'Claude Code CLI';
+  if (p.id === 'codex') return p.accountLabel || 'Official ChatGPT Codex CLI';
+  if (p.id === 'claude') return p.accountLabel || 'Official Claude Code CLI';
   if (p.id === 'gemini_agy') return p.accountLabel || 'Google Antigravity & Gemini CLI';
   if (p.id === 'ollama') return p.models.length > 0 ? `${p.models.length} local models ready` : 'Offline Ollama';
   return p.subtitle;
@@ -481,7 +481,7 @@ export function ComposerBar({
                                   ? slot.signedIn
                                     ? `${slot.accountLabel || 'Gemini CLI'} · ${slot.models.length} models`
                                     : 'Not signed in'
-                                  : slot.accountLabel || slot.homeDirHint;
+                                  : slot.accountLabel || (slot.signedIn ? `${slot.label} · Active` : 'Not signed in');
                             return (
                               <button
                                 key={slot.id}

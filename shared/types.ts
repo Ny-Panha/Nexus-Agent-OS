@@ -343,6 +343,8 @@ export interface WorkflowPreset {
   prompt: string;
   agentsInvolved: AgentId[];
   builtIn?: boolean;
+  /** True when a built-in preset has local user edits (can be reset to default). */
+  edited?: boolean;
 }
 
 export interface PlanStep {

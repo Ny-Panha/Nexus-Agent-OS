@@ -21,6 +21,7 @@ const SCREENSHOTS_DIR = path.join(DATA_DIR, 'screenshots');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const PRESETS_FILE = path.join(DATA_DIR, 'presets.json');
+const PRESET_OVERRIDES_FILE = path.join(DATA_DIR, 'preset-overrides.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit-log.json');
 
 export function getDataDir(): string {
@@ -141,13 +142,99 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export const BUILTIN_PRESETS: WorkflowPreset[] = [
   {
+    id: 'preset-debug-team',
+    name: 'Debug Project (Team)',
+    khmerLabel: 'រក Error ក្នុង Project ហើយស្នើ Fix',
+    description: 'System Agent runs typecheck/build, File Agent reads failing files and proposes exact fixes.',
+    target: 'auto',
+    prompt: [
+      'Goal: រក error ក្នុង project workspace ហើយស្នើវិធី fix ឲ្យច្បាស់។',
+      '',
+      'Steps:',
+      '1. System Agent: run `npm run typecheck` (បើមាន) និង `npm run build` ក្នុង workspace ហើយយក error log ពិតៗ។',
+      '2. File Agent: អាន file ដែល error ចង្អុលទៅ (មើលតែបន្ទាត់ពាក់ព័ន្ធ)។',
+      '3. Nexus Agent: វិភាគ root cause ម្តងមួយ error។',
+      '',
+      'Rules:',
+      '- កុំទាន់ edit file — ស្នើ fix សិន។',
+      '- បើ build PASS គ្មាន error ទេ ប្រាប់ថា PASS ហើយឈប់។',
+      '',
+      'Output (Khmer + English technical terms):',
+      '- File: path/to/file',
+      '- Error: សង្ខេប 1 បន្ទាត់',
+      '- Fix: code ឬ command ត្រៀម copy',
+    ].join('\n'),
+    agentsInvolved: ['orchestrator', 'system', 'file'],
+    builtIn: true,
+  },
+  {
+    id: 'preset-code-review',
+    name: 'Review My Changes',
+    khmerLabel: 'Review code ដែលទើបកែ មុន commit',
+    description: 'Reviews uncommitted git changes for bugs, security issues, and readability before commit.',
+    target: 'auto',
+    prompt: [
+      'Goal: Review code ដែលខ្ញុំទើបកែ (uncommitted changes) មុន commit។',
+      '',
+      'Steps:',
+      '1. System Agent: run `git status` និង `git diff --stat` ក្នុង workspace។',
+      '2. File Agent: អាន `git diff` នៃ file ដែលប្តូរ។',
+      '3. Nexus Agent: ពិនិត្យ 4 ចំណុច — Bug/Logic, Security (secret, injection, XSS), Error handling, Readability។',
+      '',
+      'Rules:',
+      '- Read only — កុំ edit, កុំ commit, កុំ push។',
+      '',
+      'Output:',
+      '- ✅ ល្អ: ...',
+      '- ⚠️ គួរកែ: File + បន្ទាត់ + ហេតុផល + fix',
+      '- Commit message ស្នើ (Conventional Commits) 1 បន្ទាត់',
+    ].join('\n'),
+    agentsInvolved: ['orchestrator', 'system', 'file'],
+    builtIn: true,
+  },
+  {
+    id: 'preset-security-check',
+    name: 'Security Check (.env & Secrets)',
+    khmerLabel: 'ពិនិត្យ .env, API key លេចធ្លាយ',
+    description: 'Defensive scan: .gitignore covers .env, no hardcoded API keys or passwords in source files.',
+    target: 'auto',
+    prompt: [
+      'Goal: Defensive security check លើ project workspace របស់ខ្ញុំ។',
+      '',
+      'Steps:',
+      '1. File Agent: ពិនិត្យ `.gitignore` ថាមាន `.env`, `node_modules`, logs ឬអត់។',
+      '2. File Agent: ស្វែងរក hardcoded secret ក្នុង source code (pattern: `API_KEY`, `SECRET`, `password=`, `sk-`, `AIza`, `mongodb+srv://`)។',
+      '3. System Agent: run `git ls-files | findstr /i ".env"` ដើម្បីដឹងថា .env ត្រូវបាន commit ឬអត់។',
+      '',
+      'Rules:',
+      '- Read only។ ពេល report ត្រូវ mask value (ឧ. `sk-****abcd`) — កុំបង្ហាញ secret ពេញ។',
+      '',
+      'Output: Checklist ✅ / ⚠️ + File + របៀប fix។',
+    ].join('\n'),
+    agentsInvolved: ['orchestrator', 'file', 'system'],
+    builtIn: true,
+  },
+  {
     id: 'preset-system-health',
     name: 'Laptop Health Audit',
     khmerLabel: 'ពិនិត្យសុខភាព Laptop',
     description: 'System Agent inspects CPU, RAM, drives, and top processes and summarizes recommendations.',
     target: 'auto',
-    prompt:
-      'ពិនិត្យសុខភាព laptop របស់ខ្ញុំទាំងមូល (CPU, RAM, Disk space, Top processes ដែលស៊ី RAM ច្រើន) ហើយសង្ខេបជាភាសាខ្មែរ + ណែនាំអ្វីគួរបិទឬសម្អាត។',
+    prompt: [
+      'Goal: ពិនិត្យសុខភាព laptop របស់ខ្ញុំ។',
+      '',
+      'Steps:',
+      '1. System Agent: យក CPU usage, RAM used/total, Disk free space គ្រប់ drive។',
+      '2. System Agent: list Top 5 processes ដែលស៊ី RAM ច្រើនជាងគេ។',
+      '',
+      'Rules:',
+      '- Read only — កុំ kill process, កុំលុប file។',
+      '',
+      'Output (ខ្លី):',
+      '- តារាង CPU / RAM / Disk',
+      '- Top 5 processes',
+      '- ណែនាំ 3 ចំណុចអ្វីគួរបិទ ឬសម្អាត',
+    ].join('\n'),
     agentsInvolved: ['orchestrator', 'system'],
     builtIn: true,
   },
@@ -157,8 +244,21 @@ export const BUILTIN_PRESETS: WorkflowPreset[] = [
     khmerLabel: 'ស្កេន Desktop & រៀបចំឯកសារ',
     description: 'File Agent scans your Desktop folder and suggests a clean folder organization without deleting anything.',
     target: 'auto',
-    prompt:
-      'ប្រើ File Agent ស្កេនមើល files និង folders ទាំងអស់លើ Desktop របស់ខ្ញុំ ហើយរៀបចំសំណើបែងចែក folder ឲ្យមានរបៀប (កុំទាន់លុប ឬផ្លាស់ទីអី ស្នើសិន)។',
+    prompt: [
+      'Goal: រៀបចំ Desktop ឲ្យមានរបៀប។',
+      '',
+      'Steps:',
+      '1. File Agent: list files និង folders លើ Desktop (ឈ្មោះ, ប្រភេទ, ទំហំ)។',
+      '2. Nexus Agent: ចែកក្រុមតាមប្រភេទ (Projects, Documents, Images, Installers, Others)។',
+      '',
+      'Rules:',
+      '- ស្នើតែប៉ុណ្ណោះ — កុំ move, rename ឬលុប file ណាមួយ។',
+      '',
+      'Output:',
+      '- Folder structure ស្នើ (tree)',
+      '- File ណាគួរដាក់ folder ណា',
+      '- File ធំៗ ឬ installer ចាស់ដែលអាចលុបបាន (ឲ្យខ្ញុំសម្រេចចិត្តខ្លួនឯង)',
+    ].join('\n'),
     agentsInvolved: ['orchestrator', 'file'],
     builtIn: true,
   },
@@ -168,8 +268,22 @@ export const BUILTIN_PRESETS: WorkflowPreset[] = [
     khmerLabel: 'ស្រាវជ្រាវ Web ហើយរក្សាទុក File',
     description: 'Browser Agent researches a topic online, then File Agent writes a clean Markdown summary to Desktop.',
     target: 'auto',
-    prompt:
-      'ប្រើ Browser Agent ស្រាវជ្រាវអំពី "Model Context Protocol (MCP) for AI Agents" ហើយឲ្យ File Agent បង្កើត file សង្ខេបជា Markdown ឈ្មោះ mcp-summary.md ដាក់លើ Desktop។',
+    prompt: [
+      'Goal: ស្រាវជ្រាវប្រធានបទ "Model Context Protocol (MCP) for AI Agents"។',
+      '',
+      'Steps:',
+      '1. Browser Agent: ស្វែងរក 3 ប្រភពផ្លូវការ ឬគួរទុកចិត្ត ហើយអានសង្ខេប។',
+      '2. File Agent: បង្កើត `mcp-summary.md` លើ Desktop។',
+      '',
+      'Markdown format:',
+      '- # Title',
+      '- ## What is it (3-5 bullets)',
+      '- ## How it works',
+      '- ## Example use case',
+      '- ## Sources (links)',
+      '',
+      'Rules: Khmer + English technical terms, ខ្លី និងច្បាស់។',
+    ].join('\n'),
     agentsInvolved: ['orchestrator', 'browser', 'file'],
     builtIn: true,
   },
@@ -179,8 +293,18 @@ export const BUILTIN_PRESETS: WorkflowPreset[] = [
     khmerLabel: 'ថត Screen ហើយវិភាគ',
     description: 'System Agent captures the current desktop screen and reports active apps & what is visible.',
     target: 'auto',
-    prompt:
-      'ថត screenshot អេក្រង់ laptop ឥឡូវនេះ ហើយពិនិត្យមើលថាមាន app អ្វីខ្លះកំពុងបើកដំណើរការ រួចសង្ខេបឲ្យខ្ញុំ។',
+    prompt: [
+      'Goal: ដឹងថាឥឡូវលើ screen មានអ្វីខ្លះ។',
+      '',
+      'Steps:',
+      '1. System Agent: ថត screenshot អេក្រង់ឥឡូវនេះ។',
+      '2. System Agent: list apps / windows ដែលកំពុងបើក។',
+      '',
+      'Output:',
+      '- App កំពុងបើក (ឈ្មោះ + window title)',
+      '- អ្វីដែលឃើញលើ screen (សង្ខេប 3 bullets)',
+      '- បើឃើញ error dialog ប្រាប់ពីវា និងវិធី fix',
+    ].join('\n'),
     agentsInvolved: ['orchestrator', 'system'],
     builtIn: true,
   },
@@ -446,10 +570,19 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await saveSessions(sessions.filter((s) => s.id !== sessionId));
 }
 
+type PresetPatch = Partial<Pick<WorkflowPreset, 'name' | 'khmerLabel' | 'description' | 'target' | 'prompt' | 'agentsInvolved'>>;
+
 export async function loadPresets(): Promise<WorkflowPreset[]> {
   await ensureDirs();
-  const custom = await readJson<WorkflowPreset[]>(PRESETS_FILE, []);
-  return [...BUILTIN_PRESETS, ...custom];
+  const [custom, overrides] = await Promise.all([
+    readJson<WorkflowPreset[]>(PRESETS_FILE, []),
+    readJson<Record<string, PresetPatch>>(PRESET_OVERRIDES_FILE, {}),
+  ]);
+  const builtins = BUILTIN_PRESETS.map((p) => {
+    const ov = overrides[p.id];
+    return ov ? { ...p, ...ov, id: p.id, builtIn: true, edited: true } : p;
+  });
+  return [...builtins, ...custom];
 }
 
 export async function saveCustomPreset(
@@ -465,6 +598,37 @@ export async function saveCustomPreset(
   custom.unshift(created);
   await writeJson(PRESETS_FILE, custom);
   return created;
+}
+
+/** Edits a custom preset in place, or stores a local override for a built-in preset. */
+export async function updatePreset(id: string, patch: PresetPatch): Promise<WorkflowPreset | null> {
+  await ensureDirs();
+  const builtin = BUILTIN_PRESETS.find((p) => p.id === id);
+  if (builtin) {
+    const overrides = await readJson<Record<string, PresetPatch>>(PRESET_OVERRIDES_FILE, {});
+    overrides[id] = { ...(overrides[id] || {}), ...patch };
+    await writeJson(PRESET_OVERRIDES_FILE, overrides);
+    return { ...builtin, ...overrides[id], id, builtIn: true, edited: true };
+  }
+
+  const custom = await readJson<WorkflowPreset[]>(PRESETS_FILE, []);
+  const idx = custom.findIndex((p) => p.id === id);
+  if (idx === -1) return null;
+  custom[idx] = { ...custom[idx], ...patch, id, builtIn: false };
+  await writeJson(PRESETS_FILE, custom);
+  return custom[idx];
+}
+
+/** Removes local edits from a built-in preset so it returns to the shipped default. */
+export async function resetBuiltinPreset(id: string): Promise<WorkflowPreset | null> {
+  const builtin = BUILTIN_PRESETS.find((p) => p.id === id);
+  if (!builtin) return null;
+  const overrides = await readJson<Record<string, PresetPatch>>(PRESET_OVERRIDES_FILE, {});
+  if (overrides[id]) {
+    delete overrides[id];
+    await writeJson(PRESET_OVERRIDES_FILE, overrides);
+  }
+  return builtin;
 }
 
 export async function deleteCustomPreset(id: string): Promise<void> {

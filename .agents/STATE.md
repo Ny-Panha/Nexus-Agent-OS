@@ -1,8 +1,24 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T10:10:00+07:00
+- **Last Session**: IDE — 2026-11-22T10:35:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Editable Workflows & Production-Grade Prompts (`shared/types.ts`, `server/store/storage.ts`, `server/index.ts`, `src/lib/api.ts`, `src/components/SettingsModal.tsx`)**:
+    - Built-in and custom workflows now support in-line editing (`Edit` button) directly inside `Settings → Workflows`.
+    - User edits to built-in presets are persisted cleanly to `.nexus-data/preset-overrides.json` without modifying code files, and can be restored anytime with a single click on `Reset` (`↺`).
+    - Added "Use template" shortcut button to inject structured multi-agent instructions (`Goal:`, `Steps:`, `Rules:`, `Output:`).
+    - Upgraded all 7 shipped presets with production-grade prompts: `Debug Project (Team)`, `Review My Changes`, `Security Check (.env & Secrets)`, `Laptop Health Audit`, `Scan Desktop & Organize Plan`, `Web Research → Desktop Note`, and `Capture & Explain Screen`.
+  - **Thinking Popover Cleaned (Images 4 & 6)**:
+    - Removed confusing lightning bolt (⚡) icon; the thinking card now cleanly displays the active model name (`gemini-3.8-flash >`) and a reset button (`↺`) to restore default Medium thinking.
+  - **Clean Model Names & Provider Subtitles (Images 1, 2, 3, 5)**:
+    - Mapped raw Gemini CLI models to clean display labels matching Antigravity: `Gemini 3.8 Flash`, `Gemini 3.1 Pro Preview`, `Gemini 3 Flash Preview`, `Gemini 3.5 Flash Lite`, `Gemini 2.5 Pro`, and `Auto (Best for task)`.
+    - Deduplicated `-customtools` variants from `gemini --list-models`.
+    - Cleaned `Settings → Agents` model picker to eliminate duplicate raw slugs in sublabels.
+    - Replaced long technical provider subtitles (e.g. `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) with clean labels (`Official ChatGPT plan via Codex CLI`, `Official Claude plan via Claude Code CLI`, etc.).
+    - Fixed sidebar bottom pill so it never displays raw `data/cli-homes/...` path.
+  - **Build & Verification**:
+    - `npm run typecheck`: 0 errors.
+    - `npm run build`: `vite build` generated client assets and `tsc -p tsconfig.server.json` generated `dist-server/`.
   - **Fixed `npm run start:desktop` Embedded Server Startup (`electron/main.cjs`)**:
     - Root cause: `spawn(process.execPath, [serverEntry])` spawned `electron.exe` without `ELECTRON_RUN_AS_NODE: '1'`, causing the embedded server not to boot and `waitForServer` to time out on `http://127.0.0.1:4310/api/health`.
     - Added `ELECTRON_RUN_AS_NODE: '1'`, early health reuse check, and cleanup on error; live-verified `electron.exe` boots `dist-server/server/index.js` and returns HTTP 200 on `/api/health`.
