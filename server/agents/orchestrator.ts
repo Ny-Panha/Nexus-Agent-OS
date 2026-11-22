@@ -601,128 +601,127 @@ export class MultiAgentRunner {
         let totalUsage = planTurn.usage;
         const specialistReports: string[] = [];
 
-        // Execute delegated specialists on their OWN assigned accounts & models with isolated error handling
-        const delegationResults = await Promise.all(
-          parsedDelegation.delegations.map(async (del) => {
-            const specRoute = resolveAgentRoute(del.agent, settings);
-            const specSlotLabel = resolveSlotLabelFromSettings(settings, specRoute.provider, specRoute.slotId);
-            const handoff: AgentHandoff = {
-              id: randomUUID(),
-              from: 'orchestrator',
-              to: del.agent,
-              task: del.task,
-              status: 'running',
-              provider: specRoute.provider,
-              slotId: specRoute.slotId,
-              slotLabel: specSlotLabel,
-              model: specRoute.model,
-              startedAt: new Date().toISOString(),
-            };
-            artifacts.handoffs.push(handoff);
-            this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
+        // Execute delegated specialists sequentially as a staged pipeline
+        // (Forwarding context from completed specialists so dependent steps like
+        // File Agent -> System Agent have confirmed paths, reports, and findings)
+        for (const del of parsedDelegation.delegations) {
+          const specRoute = resolveAgentRoute(del.agent, settings);
+          const specSlotLabel = resolveSlotLabelFromSettings(settings, specRoute.provider, specRoute.slotId);
 
-            const planStep = artifacts.plan.find((s) => s.agent === del.agent && s.status === 'pending');
-            if (planStep) {
-              planStep.status = 'in_progress';
-              this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
-            }
+          let enrichedTask = del.task;
+          if (specialistReports.length > 0) {
+            enrichedTask += `\n\n[Findings & Context from Previous Specialist Agent(s)]:\n` + specialistReports.join('\n\n---\n\n');
+          }
 
-            try {
-              const out = await this.runSpecialistOnAssignedRoute({
-                session,
-                agent: del.agent,
-                task: del.task,
-                settings,
-                artifacts,
-                signal: controller.signal,
-                streamToChat: false,
-              });
+          const handoff: AgentHandoff = {
+            id: randomUUID(),
+            from: 'orchestrator',
+            to: del.agent,
+            task: del.task,
+            status: 'running',
+            provider: specRoute.provider,
+            slotId: specRoute.slotId,
+            slotLabel: specSlotLabel,
+            model: specRoute.model,
+            startedAt: new Date().toISOString(),
+          };
+          artifacts.handoffs.push(handoff);
+          this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
 
-              handoff.model = out.modelUsed;
-              if (out.slotLabel) handoff.slotLabel = out.slotLabel;
+          const planStep = artifacts.plan.find((s) => s.agent === del.agent && s.status === 'pending');
+          if (planStep) {
+            planStep.status = 'in_progress';
+            this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
+          }
 
-              if (out.errorObj) {
-                erroredAgents.add(del.agent);
-                artifacts.agentErrors.push(out.errorObj);
-                handoff.status = 'error';
-                handoff.summary = out.errorObj.message.slice(0, 260);
-                handoff.errorAction = out.errorObj.action;
-                handoff.finishedAt = new Date().toISOString();
-                this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
-                this.emit({
-                  type: 'agent_state',
-                  agent: del.agent,
-                  state: 'error',
-                  detail: out.errorObj.reason === 'quota_exceeded' ? 'Quota reached' : 'Needs sign-in',
-                });
-                if (planStep) {
-                  planStep.status = 'failed';
-                  this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
-                }
-                return {
-                  usage: out.usage,
-                  text: `[${del.agent.toUpperCase()} AGENT ERROR (${specRoute.provider}/${specSlotLabel || specRoute.slotId || 'api'})]\n${out.errorObj.message}`,
-                };
-              }
+          try {
+            const out = await this.runSpecialistOnAssignedRoute({
+              session,
+              agent: del.agent,
+              task: enrichedTask,
+              settings,
+              artifacts,
+              signal: controller.signal,
+              streamToChat: false,
+            });
 
-              handoff.status = 'completed';
-              handoff.summary = out.report.slice(0, 320);
-              handoff.finishedAt = new Date().toISOString();
-              this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
-              this.emit({ type: 'agent_state', agent: del.agent, state: 'done' });
-              if (planStep) {
-                planStep.status = 'completed';
-                this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
-              }
-              return {
-                usage: out.usage,
-                text: `[${del.agent.toUpperCase()} AGENT REPORT (${specRoute.provider} · ${out.slotLabel || 'default'} · ${out.modelUsed})]\n${out.report}`,
-              };
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
+            handoff.model = out.modelUsed;
+            if (out.slotLabel) handoff.slotLabel = out.slotLabel;
+
+            if (out.errorObj) {
               erroredAgents.add(del.agent);
-              const errObj: AgentSlotError = {
-                agent: del.agent,
-                provider: specRoute.provider,
-                slotId: specRoute.slotId,
-                slotLabel: specSlotLabel,
-                model: specRoute.model,
-                reason: 'error',
-                message: msg,
-                action: {
-                  type: isCliAccountProvider(specRoute.provider) ? 'login' : 'open_settings',
-                  provider: specRoute.provider,
-                  slotId: specRoute.slotId,
-                  slotLabel: specSlotLabel,
-                  agent: del.agent,
-                  reason: 'error',
-                  label: isCliAccountProvider(specRoute.provider)
-                    ? `Check ${specRoute.provider} (${specSlotLabel || specRoute.slotId})`
-                    : 'Open AI Settings',
-                },
-              };
-              artifacts.agentErrors.push(errObj);
+              artifacts.agentErrors.push(out.errorObj);
               handoff.status = 'error';
-              handoff.summary = msg.slice(0, 260);
-              handoff.errorAction = errObj.action;
+              handoff.summary = out.errorObj.message.slice(0, 260);
+              handoff.errorAction = out.errorObj.action;
               handoff.finishedAt = new Date().toISOString();
               this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
-              this.emit({ type: 'agent_state', agent: del.agent, state: 'error', detail: 'Error' });
+              this.emit({
+                type: 'agent_state',
+                agent: del.agent,
+                state: 'error',
+                detail: out.errorObj.reason === 'quota_exceeded' ? 'Quota reached' : 'Needs sign-in',
+              });
               if (planStep) {
                 planStep.status = 'failed';
                 this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
               }
-              return {
-                usage: undefined,
-                text: `[${del.agent.toUpperCase()} AGENT ERROR]\n${msg}`,
-              };
+              specialistReports.push(
+                `[${del.agent.toUpperCase()} AGENT ERROR (${specRoute.provider}/${specSlotLabel || specRoute.slotId || 'api'})]\n${out.errorObj.message}`,
+              );
+              totalUsage = mergeUsage(totalUsage, out.usage);
+              continue;
             }
-          }),
-        );
 
-        for (const r of delegationResults) {
-          totalUsage = mergeUsage(totalUsage, r.usage);
-          specialistReports.push(r.text);
+            handoff.status = 'completed';
+            handoff.summary = out.report.slice(0, 320);
+            handoff.finishedAt = new Date().toISOString();
+            this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
+            this.emit({ type: 'agent_state', agent: del.agent, state: 'done' });
+            if (planStep) {
+              planStep.status = 'completed';
+              this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
+            }
+            specialistReports.push(
+              `[${del.agent.toUpperCase()} AGENT REPORT (${specRoute.provider} · ${out.slotLabel || 'default'} · ${out.modelUsed})]\n${out.report}`,
+            );
+            totalUsage = mergeUsage(totalUsage, out.usage);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            erroredAgents.add(del.agent);
+            const errObj: AgentSlotError = {
+              agent: del.agent,
+              provider: specRoute.provider,
+              slotId: specRoute.slotId,
+              slotLabel: specSlotLabel,
+              model: specRoute.model,
+              reason: 'error',
+              message: msg,
+              action: {
+                type: isCliAccountProvider(specRoute.provider) ? 'login' : 'open_settings',
+                provider: specRoute.provider,
+                slotId: specRoute.slotId,
+                slotLabel: specSlotLabel,
+                agent: del.agent,
+                reason: 'error',
+                label: isCliAccountProvider(specRoute.provider)
+                  ? `Check ${specRoute.provider} (${specSlotLabel || specRoute.slotId})`
+                  : 'Open AI Settings',
+              },
+            };
+            artifacts.agentErrors.push(errObj);
+            handoff.status = 'error';
+            handoff.summary = msg.slice(0, 260);
+            handoff.errorAction = errObj.action;
+            handoff.finishedAt = new Date().toISOString();
+            this.emit({ type: 'handoff_event', sessionId: session.id, handoff });
+            this.emit({ type: 'agent_state', agent: del.agent, state: 'error', detail: 'Error' });
+            if (planStep) {
+              planStep.status = 'failed';
+              this.emit({ type: 'plan_updated', sessionId: session.id, steps: [...artifacts.plan] });
+            }
+            specialistReports.push(`[${del.agent.toUpperCase()} AGENT ERROR]\n${msg}`);
+          }
         }
 
         // Hop 3: Orchestrator synthesizes final response on its own account/slot

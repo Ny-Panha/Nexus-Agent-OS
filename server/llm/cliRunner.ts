@@ -220,10 +220,10 @@ export function resolveAgyModelVariant(
   // Safe Fallback: If requested model (e.g. "gemini-4-hydrogen") is not in agy.exe models,
   // pick the best verified model (gemini-3.8-flash-high or gemini-3.8-flash-medium) to prevent CLI crash!
   const safeFallback =
-    models.find((m) => m.id.includes('3.8-flash'))?.effortVariants?.medium ||
+    models.find((m) => m.id.includes('3.8-flash'))?.effortVariants?.high ||
     models.find((m) => m.id.includes('3.8-flash'))?.id ||
     models[0]?.id ||
-    'gemini-3.8-flash-medium';
+    'gemini-3.8-flash-high';
 
   return { modelId: safeFallback, passEffortFlag: false };
 }
