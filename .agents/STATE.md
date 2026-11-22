@@ -1,8 +1,11 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T10:05:00+07:00
+- **Last Session**: IDE — 2026-11-22T10:10:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Fixed `npm run start:desktop` Embedded Server Startup (`electron/main.cjs`)**:
+    - Root cause: `spawn(process.execPath, [serverEntry])` spawned `electron.exe` without `ELECTRON_RUN_AS_NODE: '1'`, causing the embedded server not to boot and `waitForServer` to time out on `http://127.0.0.1:4310/api/health`.
+    - Added `ELECTRON_RUN_AS_NODE: '1'`, early health reuse check, and cleanup on error; live-verified `electron.exe` boots `dist-server/server/index.js` and returns HTTP 200 on `/api/health`.
   - **Clean Provider-Specific UI, Real-Only Model Catalogs, and Zero Popover Clipping (`shared/types.ts`, `server/llm/providerRegistry.ts`, `server/llm/cliRunner.ts`, `src/components/ComposerBar.tsx`, `src/components/StudioSelect.tsx`, `src/components/SettingsModal.tsx`, `src/components/Sidebar.tsx`)**:
     - **Real Models Only**:
       - Codex (`codex`): loads real `visibility === 'list'` models + real `supportedEfforts` from `<codexHome>/models_cache.json` (`GPT-6.2 Astra`, `GPT-6.2 Sol`, `GPT-6.1 Terra`, etc.) — removed hardcoded fake `gpt-5.4` / `o3` / `o4-mini` and ugly `(Configured)` suffix; passes real `xhigh` and `max` to `codex exec`.

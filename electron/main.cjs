@@ -28,8 +28,20 @@ function waitForServer(url, retries = 40) {
   });
 }
 
+async function isServerHealthy(url) {
+  try {
+    const res = await fetch(url);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function startEmbeddedServerIfNeeded() {
   if (DEV_URL) return;
+
+  const healthUrl = `http://127.0.0.1:${PROD_PORT}/api/health`;
+  if (await isServerHealthy(healthUrl)) return;
 
   const projectRoot = path.join(__dirname, '..');
   const serverEntry = path.join(projectRoot, 'dist-server', 'server', 'index.js');
@@ -37,13 +49,14 @@ async function startEmbeddedServerIfNeeded() {
     cwd: projectRoot,
     env: {
       ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
       NEXUS_PORT: PROD_PORT,
       NEXUS_SERVE_STATIC: '1',
     },
     stdio: 'inherit',
   });
 
-  await waitForServer(`http://127.0.0.1:${PROD_PORT}/api/health`);
+  await waitForServer(healthUrl);
 }
 
 function createWindow() {
@@ -132,6 +145,10 @@ app.whenReady().then(async () => {
     createWindow();
   } catch (err) {
     console.error('Failed to launch Nexus Agent OS:', err);
+    if (serverProcess) {
+      serverProcess.kill();
+      serverProcess = null;
+    }
     app.quit();
   }
 
