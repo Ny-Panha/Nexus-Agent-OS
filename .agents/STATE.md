@@ -1,8 +1,13 @@
 # Nexus Agent OS — Session State
 
-- **Last Session**: IDE — 2026-11-22T14:00:00+07:00
+- **Last Session**: IDE — 2026-11-22T14:30:00+07:00
 - **Branch**: `feat/per-agent-accounts` (pushed only — NOT merged to `main`)
 - **Summary**:
+  - **Fixed Desktop App Launcher & Server Boot Race (`electron/start.cjs`, `electron/main.cjs`, `package.json`)**:
+    - Root cause: On Windows, `ELECTRON_RUN_AS_NODE` in the shell or spawning `electron.exe` with `ELECTRON_RUN_AS_NODE: '1'` caused Electron to start in Node mode or fail silently due to Windows GUI subsystem detachment, resulting in `Server did not respond at http://127.0.0.1:4310/api/health`.
+    - Added dedicated clean launcher `electron/start.cjs` that explicitly purges `ELECTRON_RUN_AS_NODE` from the environment before spawning Electron, ensuring Electron always launches as a pure desktop GUI application.
+    - In `electron/main.cjs`, embedded server now spawns `node.exe` directly as a true console subprocess with piped stdio and increased health check retries to 60 (15 seconds).
+    - Live verified: `npm run start:desktop` boots embedded server and responds HTTP 200 on `/api/health` in under 2 seconds.
   - **Staged Sequential Team Delegation & Context Forwarding (`server/agents/orchestrator.ts`)**:
     - Root cause: Orchestrator previously ran all delegated tasks simultaneously with `Promise.all` at line 605, causing System Agent to start before File Agent finished and reported its findings and confirmed project path.
     - Replaced `Promise.all` with a staged sequential loop (`for (const del of parsedDelegation.delegations)`).

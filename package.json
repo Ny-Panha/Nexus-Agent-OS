@@ -12,8 +12,8 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "build": "npm run build:client && npm run build:server",
-    "start:desktop": "electron .",
-    "build:desktop": "npm run build && electron .",
+    "start:desktop": "node electron/start.cjs",
+    "build:desktop": "npm run build && node electron/start.cjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {

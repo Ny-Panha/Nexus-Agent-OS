@@ -8,7 +8,7 @@ let serverProcess = null;
 const DEV_URL = process.env.NEXUS_DEV_URL;
 const PROD_PORT = process.env.NEXUS_PORT || '4310';
 
-function waitForServer(url, retries = 40) {
+function waitForServer(url, retries = 60) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const tick = async () => {
@@ -45,18 +45,49 @@ async function startEmbeddedServerIfNeeded() {
 
   const projectRoot = path.join(__dirname, '..');
   const serverEntry = path.join(projectRoot, 'dist-server', 'server', 'index.js');
-  serverProcess = spawn(process.execPath, [serverEntry], {
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: '1',
-      NEXUS_PORT: PROD_PORT,
-      NEXUS_SERVE_STATIC: '1',
-    },
-    stdio: 'inherit',
-  });
 
-  await waitForServer(healthUrl);
+  const env = {
+    ...process.env,
+    NEXUS_PORT: PROD_PORT,
+    NEXUS_SERVE_STATIC: '1',
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  // On Windows/macOS/Linux, try system Node.js first (true console runtime, fast boot).
+  // Fall back to process.execPath with ELECTRON_RUN_AS_NODE: '1' if standalone node is missing.
+  let spawned = false;
+  try {
+    const nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
+    serverProcess = spawn(nodeBin, [serverEntry], {
+      cwd: projectRoot,
+      env,
+      stdio: 'pipe',
+    });
+    serverProcess.on('error', () => {
+      spawned = false;
+    });
+    if (serverProcess.pid) {
+      spawned = true;
+    }
+  } catch {
+    spawned = false;
+  }
+
+  if (!spawned || !serverProcess || !serverProcess.pid) {
+    serverProcess = spawn(process.execPath, [serverEntry], {
+      cwd: projectRoot,
+      env: {
+        ...env,
+        ELECTRON_RUN_AS_NODE: '1',
+      },
+      stdio: 'pipe',
+    });
+  }
+
+  serverProcess.stdout?.on('data', (d) => process.stdout.write(d));
+  serverProcess.stderr?.on('data', (d) => process.stderr.write(d));
+
+  await waitForServer(healthUrl, 60);
 }
 
 function createWindow() {
